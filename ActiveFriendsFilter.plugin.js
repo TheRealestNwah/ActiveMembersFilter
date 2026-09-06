@@ -1,0 +1,743 @@
+/**
+ * @name ActiveFriendsFilter
+ * @author TheRealestNwah
+ * @source https://github.com/TheRealestNwah/ActiveFriendsFilter
+ * @website https://github.com/TheRealestNwah/ActiveFriendsFilter
+ * @description Adds a toggle button above the server member list that filters it down to members currently playing a game, listening to Spotify, streaming or watching something.
+ * @version 3.1.0
+ */
+
+module.exports = class ActiveFriendsFilter {
+    constructor() {
+        this.active = false;
+        this.button = null;
+        this.sidebar = null;
+        this.styleId = "aff-style";
+        this.cvStyleId = "aff-cv-style";
+        this.DEBUG = true; // set to false to silence console logs
+
+        // Populated by the resolvers so the debug panel can report what worked.
+        this.sidebarStrategy = null;
+        this.sidebarStats = {};
+        this.rowStrategy = null;
+        this.strategyStats = {};
+        this.lastRows = [];
+        this.cvOverrideActive = false;
+        this.lastError = null;
+
+        this.stores = { presence: null, relationship: null, resolved: false };
+    }
+
+    log(...args) {
+        if (this.DEBUG) console.log("[ActiveFriendsFilter]", ...args);
+    }
+
+    start() {
+        this.injectStyles();
+        // Mount immediately and unconditionally. The button must exist even when
+        // nothing is detected, otherwise the only way to diagnose a detection
+        // failure is gated behind that same detection succeeding.
+        this.mountButton();
+        this.tick();
+        this._mainLoop = setInterval(() => this.tick(), 1000);
+        this.log("started");
+    }
+
+    stop() {
+        clearInterval(this._mainLoop);
+        this.active = false;
+        this.showAll();
+        this.removeStyles();
+        document.querySelector(".aff-debug-panel")?.remove();
+        if (this.button) this.button.remove();
+        this.button = null;
+        this.sidebar = null;
+    }
+
+    // ---------------------------------------------------------------- styles
+
+    injectStyles() {
+        const style = document.createElement("style");
+        style.id = this.styleId;
+        style.textContent = `
+            .aff-toggle-btn {
+                position: fixed;
+                top: 12px;
+                right: 12px;
+                z-index: 9999;
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                padding: 6px 10px;
+                border-radius: 8px;
+                font-size: 12px;
+                font-weight: 600;
+                cursor: pointer;
+                background: var(--background-secondary-alt, #2b2d31);
+                color: var(--text-normal, #dbdee1);
+                border: 1px solid var(--background-modifier-accent, #3f4147);
+                user-select: none;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+                white-space: nowrap;
+            }
+            .aff-toggle-btn:hover {
+                background: var(--background-modifier-hover, #35373c);
+            }
+            .aff-toggle-btn.aff-active {
+                background: var(--brand-experiment, #5865f2);
+                color: #fff;
+                border-color: var(--brand-experiment, #5865f2);
+            }
+            .aff-toggle-btn.aff-idle {
+                opacity: 0.75;
+                border-style: dashed;
+            }
+            .aff-hidden-row {
+                display: none !important;
+            }
+            .aff-debug-panel {
+                position: fixed;
+                z-index: 10000;
+                top: 60px;
+                right: 20px;
+                width: 520px;
+                max-height: 76vh;
+                overflow-y: auto;
+                background: #111214;
+                color: #dbdee1;
+                border: 1px solid #5865f2;
+                border-radius: 8px;
+                padding: 12px;
+                font-family: monospace;
+                font-size: 11px;
+                line-height: 1.5;
+                white-space: pre-wrap;
+                box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+            }
+            .aff-debug-toolbar {
+                position: sticky;
+                top: 0;
+                display: flex;
+                gap: 6px;
+                justify-content: flex-end;
+                margin-bottom: 6px;
+            }
+            .aff-debug-toolbar > div {
+                cursor: pointer;
+                background: #5865f2;
+                color: #fff;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-weight: bold;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    removeStyles() {
+        document.getElementById(this.styleId)?.remove();
+        document.getElementById(this.cvStyleId)?.remove();
+        this.cvOverrideActive = false;
+    }
+
+    // `content-visibility: auto` lets the browser skip layout for off-screen
+    // rows. While skipped, an element reports only its padding box to
+    // getBoundingClientRect() (a padded row measures ~2px) and innerText
+    // returns "" because innerText is layout-aware. Detection below no longer
+    // depends on either, but forcing the property off keeps the geometry
+    // fallback honest. Only injected if a row is actually found to use it,
+    // since disabling it costs render performance in large servers.
+    enableContentVisibilityOverride() {
+        if (this.cvOverrideActive) return;
+        const style = document.createElement("style");
+        style.id = this.cvStyleId;
+        style.textContent = `
+            [class*="member__"], [class*="memberInner"], [role="listitem"] {
+                content-visibility: visible !important;
+                contain-intrinsic-size: none !important;
+            }
+        `;
+        document.head.appendChild(style);
+        this.cvOverrideActive = true;
+        this.log("content-visibility override injected (skipped rows detected)");
+    }
+
+    // ----------------------------------------------------------- flux stores
+
+    // Reading activity from Discord's own PresenceStore instead of scraping
+    // rendered text: works for rows that never painted, and does not depend
+    // on the client's display language.
+    getStores() {
+        if (this.stores.resolved) return this.stores;
+        this.stores.resolved = true;
+
+        const W = window.BdApi?.Webpack;
+        if (!W) return this.stores;
+
+        const pick = (name) => {
+            try {
+                if (W.Stores?.[name]) return W.Stores[name];
+                if (typeof W.getStore === "function") {
+                    const s = W.getStore(name);
+                    if (s) return s;
+                }
+                if (typeof W.getModule === "function") {
+                    return (
+                        W.getModule((m) => m?._dispatchToken && m?.getName?.() === name, {
+                            searchExports: true,
+                        }) || null
+                    );
+                }
+            } catch (e) {
+                this.log(`store lookup failed for ${name}`, e);
+            }
+            return null;
+        };
+
+        this.stores.presence = pick("PresenceStore");
+        this.stores.relationship = pick("RelationshipStore");
+        this.log("stores resolved", {
+            presence: !!this.stores.presence,
+            relationship: !!this.stores.relationship,
+        });
+        return this.stores;
+    }
+
+    // Discord ActivityType: 0 playing, 1 streaming, 2 listening, 3 watching,
+    // 4 custom status, 5 competing. Custom status is just a mood line, not
+    // something the user is doing, so it does not count as active.
+    activityForUser(userId) {
+        const { presence } = this.getStores();
+        if (!presence || !userId || typeof presence.getActivities !== "function") return null;
+
+        let acts;
+        try {
+            acts = presence.getActivities(userId) || [];
+        } catch (e) {
+            return null;
+        }
+
+        const real = acts.filter((a) => a && a.type !== 4);
+        if (!real.length) return { active: false, label: "" };
+
+        const a = real[0];
+        const verb =
+            { 0: "Playing", 1: "Streaming", 2: "Listening to", 3: "Watching", 5: "Competing in" }[
+                a.type
+            ] || "Active:";
+        return { active: true, label: `${verb} ${a.name || "?"}`.trim() };
+    }
+
+    isFriend(userId) {
+        const { relationship } = this.getStores();
+        if (!relationship || !userId || typeof relationship.isFriend !== "function") return null;
+        try {
+            return relationship.isFriend(userId);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // --------------------------------------------------------------- sidebar
+
+    tick() {
+        try {
+            this.lastError = null;
+
+            if (!this.button || !document.body.contains(this.button)) this.mountButton();
+
+            const layerOpen = this.isLayerOpen();
+            this.button.style.display = layerOpen ? "none" : "flex";
+            if (layerOpen) return;
+
+            const sidebar = this.resolveSidebar();
+            if (sidebar !== this.sidebar) {
+                this.sidebar = sidebar;
+                if (sidebar) this.log(`member sidebar acquired via "${this.sidebarStrategy}"`, sidebar);
+            }
+
+            this.positionButton();
+            this.updateButtonLabel();
+
+            if (this.active && this.sidebar) this.applyFilter();
+        } catch (e) {
+            this.lastError = e;
+            console.error("[ActiveFriendsFilter] tick failed:", e);
+        }
+    }
+
+    // A layer only counts as "open" if it actually covers the app. Tooltips,
+    // popouts and Discord's persistent mount points also live in layerContainer,
+    // and treating any of those as a modal hid the button permanently.
+    isLayerOpen() {
+        const viewport = window.innerWidth * window.innerHeight;
+        if (!viewport) return false;
+        return Array.from(document.querySelectorAll('[class*="layerContainer"]')).some((el) => {
+            if (!el.children.length) return false;
+            const r = el.getBoundingClientRect();
+            return (r.width * r.height) / viewport > 0.4;
+        });
+    }
+
+    // --------------------------------------------------------------- sidebar
+
+    isPlausibleSidebar(el) {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        if (r.width < 150 || r.width > 460 || r.height < 200) return false;
+        return el.querySelectorAll('img[src*="/avatars/"], [class*="avatar"]').length >= 2;
+    }
+
+    // Class-based lookups first (cheap, and they survive odd window geometry),
+    // geometry last. Every candidate still has to pass isPlausibleSidebar().
+    get sidebarStrategies() {
+        return [
+            [
+                "membersWrap class",
+                () => Array.from(document.querySelectorAll('[class*="membersWrap"]')),
+            ],
+            ["members_ class", () => Array.from(document.querySelectorAll('div[class*="members_"]'))],
+            ["role=list", () => Array.from(document.querySelectorAll('[role="list"]'))],
+            ["geometry", () => this.findSidebarByGeometry()],
+        ];
+    }
+
+    resolveSidebar() {
+        const stats = {};
+        let winner = null;
+        for (const [name, fn] of this.sidebarStrategies) {
+            let candidates = [];
+            try {
+                candidates = fn() || [];
+            } catch (e) {
+                candidates = [];
+            }
+            const good = candidates.filter((el) => this.isPlausibleSidebar(el));
+            stats[name] = `${good.length}/${candidates.length}`;
+            if (!winner && good.length) winner = { name, el: good[0] };
+        }
+        this.sidebarStats = stats;
+        this.sidebarStrategy = winner?.name || null;
+        return winner?.el || null;
+    }
+
+    // Original approach: a tall, narrow column flush against the right edge of
+    // the window, containing several avatar images.
+    findSidebarByGeometry() {
+        const out = [];
+        for (const el of document.querySelectorAll("div")) {
+            const rect = el.getBoundingClientRect();
+            if (
+                rect.width > 180 &&
+                rect.width < 420 &&
+                rect.height > 250 &&
+                Math.abs(rect.right - window.innerWidth) < 8 &&
+                rect.left > window.innerWidth * 0.55
+            ) {
+                out.push(el);
+            }
+        }
+        return out;
+    }
+
+    // Back-compat shim.
+    findMemberSidebar() {
+        return this.resolveSidebar();
+    }
+
+    // ------------------------------------------------------- row resolution
+
+    // A real user avatar URL is /avatars/<snowflake>/<hash>. Default avatars
+    // are /embed/avatars/<0-5>.png, which also contain "/avatars/" but carry
+    // no user id — the digit-length check separates them.
+    userIdFromAvatar(img) {
+        const m = /\/avatars\/(\d{16,21})\//.exec(img.getAttribute("src") || "");
+        return m ? m[1] : null;
+    }
+
+    // Legacy strategy, kept only as a last resort. Walks up from the avatar
+    // looking for something row-shaped. This is what broke: with skipped
+    // (unpainted) rows the heights it measures are meaningless.
+    geometryWalk(avatar) {
+        let el = avatar;
+        for (let i = 0; i < 8 && el.parentElement; i++) {
+            el = el.parentElement;
+            const rect = el.getBoundingClientRect();
+            if (rect.height >= 26 && rect.height <= 76 && rect.width > 120) return el;
+        }
+        return null;
+    }
+
+    // Ordered best-first. Each maps an avatar <img> to its row element.
+    // The first three are structural/semantic and do not measure anything,
+    // so they are immune to content-visibility, transforms and virtualization.
+    get rowStrategies() {
+        return [
+            ["data-list-item-id", (a) => a.closest("[data-list-item-id]")],
+            ["role=listitem", (a) => a.closest('[role="listitem"]')],
+            [
+                "member__ class",
+                (a) => a.closest('[class*="member__"], [class*="memberInner"], [class*="member_"]'),
+            ],
+            ["geometry walk", (a) => this.geometryWalk(a)],
+        ];
+    }
+
+    // Tries each strategy against every avatar and keeps the first one that
+    // resolves at least half of them. Any candidate that wraps more than one
+    // avatar is rejected outright — that is how the whole-list scroll
+    // container gets filtered out without needing to know its height.
+    resolveRows() {
+        if (!this.sidebar) {
+            this.strategyStats = { total: 0 };
+            this.rowStrategy = null;
+            this.lastRows = [];
+            return [];
+        }
+
+        const avatars = Array.from(this.sidebar.querySelectorAll('img[src*="/avatars/"]'));
+        const stats = { total: avatars.length };
+        let winner = null;
+
+        for (const [name, fn] of this.rowStrategies) {
+            const found = new Map(); // row element -> avatar
+            for (const avatar of avatars) {
+                let el = null;
+                try {
+                    el = fn(avatar);
+                } catch (e) {
+                    // Unsupported selector in this Electron build; skip strategy.
+                    break;
+                }
+                if (!el || el === this.sidebar || found.has(el)) continue;
+                if (el.querySelectorAll('img[src*="/avatars/"]').length > 1) continue;
+                found.set(el, avatar);
+            }
+            stats[name] = found.size;
+            if (!winner && avatars.length > 0 && found.size >= Math.ceil(avatars.length / 2)) {
+                winner = { name, found };
+            }
+        }
+
+        this.strategyStats = stats;
+        this.rowStrategy = winner?.name || null;
+
+        const rows = winner
+            ? Array.from(winner.found, ([el, avatar]) => ({
+                  el,
+                  avatar,
+                  userId: this.userIdFromAvatar(avatar),
+              }))
+            : [];
+
+        this.maybeFixContentVisibility(rows);
+        this.lastRows = rows;
+        return rows;
+    }
+
+    maybeFixContentVisibility(rows) {
+        if (this.cvOverrideActive || !rows.length) return;
+        const skipped = rows.some((r) => {
+            const cv = getComputedStyle(r.el).contentVisibility;
+            return cv === "auto" || cv === "hidden";
+        });
+        if (skipped) this.enableContentVisibilityOverride();
+    }
+
+    // Back-compat shim: earlier versions of this plugin exposed bare elements.
+    getMemberRows() {
+        return this.resolveRows().map((r) => r.el);
+    }
+
+    // ------------------------------------------------------------ filtering
+
+    // Prefers PresenceStore. Falls back to reading the row's text, using
+    // textContent rather than innerText: innerText is layout-aware and
+    // returns "" for rows the browser has skipped rendering.
+    rowIsActive(row) {
+        const fromStore = this.activityForUser(row.userId);
+        if (fromStore) return fromStore.active;
+        const text = row.el.textContent || "";
+        return /Playing |Listening to|Streaming|Watching |Competing in/i.test(text);
+    }
+
+    applyFilter() {
+        const rows = this.resolveRows();
+        let shown = 0;
+        rows.forEach((row) => {
+            if (!this.active) {
+                row.el.classList.remove("aff-hidden-row");
+                shown++;
+                return;
+            }
+            const active = this.rowIsActive(row);
+            row.el.classList.toggle("aff-hidden-row", !active);
+            if (active) shown++;
+        });
+        this.log(
+            `filter applied via "${this.rowStrategy}": ${rows.length} rows scanned, ${shown} shown`
+        );
+    }
+
+    showAll() {
+        document
+            .querySelectorAll(".aff-hidden-row")
+            .forEach((el) => el.classList.remove("aff-hidden-row"));
+    }
+
+    // --------------------------------------------------------------- button
+
+    mountButton() {
+        document.querySelectorAll(".aff-toggle-btn").forEach((el) => el.remove());
+        const btn = document.createElement("div");
+        btn.className = "aff-toggle-btn";
+        btn.addEventListener("click", () => {
+            if (!this.sidebar) {
+                // Nothing to filter yet — show why, rather than doing nothing.
+                this.dumpDebugInfo();
+                return;
+            }
+            this.active = !this.active;
+            btn.classList.toggle("aff-active", this.active);
+            if (!this.active) this.showAll();
+            this.updateButtonLabel();
+            this.applyFilter();
+        });
+        btn.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            this.dumpDebugInfo();
+        });
+        document.body.appendChild(btn);
+        this.button = btn;
+        this.updateButtonLabel();
+        this.positionButton();
+        this.log("button mounted");
+    }
+
+    updateButtonLabel() {
+        if (!this.button) return;
+        if (!this.sidebar) {
+            this.button.innerText = "🎮 No member list";
+            this.button.title =
+                "Member list not detected. Open it with the people icon in the top right, or click for debug info.";
+            this.button.classList.add("aff-idle");
+            this.button.classList.remove("aff-active");
+            return;
+        }
+        this.button.classList.remove("aff-idle");
+        this.button.innerText = this.active ? "🎮 Showing Active Only" : "🎮 Show Active Only";
+        this.button.title = "Left-click: toggle filter. Right-click: on-screen debug panel.";
+    }
+
+    // Parks top-right by default and only moves over the member list once one
+    // is found, so the button can never end up positioned off-screen.
+    positionButton() {
+        if (!this.button) return;
+        if (!this.sidebar) {
+            this.button.style.left = "";
+            this.button.style.right = "12px";
+            this.button.style.top = "12px";
+            return;
+        }
+        const rect = this.sidebar.getBoundingClientRect();
+        this.button.style.right = "auto";
+        this.button.style.top = `${Math.max(rect.top + 8, 8)}px`;
+        this.button.style.left = `${Math.max(rect.left + (rect.width - this.button.offsetWidth) / 2, 8)}px`;
+    }
+
+    // ---------------------------------------------------------------- debug
+
+    describe(el, label) {
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        const cls = (el.className || "").toString().slice(0, 44);
+        return (
+            `${label} <${el.tagName.toLowerCase()}> h=${r.height.toFixed(0)} w=${r.width.toFixed(0)} ` +
+            `cv=${cs.contentVisibility} cis=${cs.containIntrinsicSize} pos=${cs.position} ` +
+            `disp=${cs.display} tf=${cs.transform.slice(0, 24)}\n    class="${cls}" ` +
+            `listId="${(el.getAttribute("data-list-item-id") || "").slice(0, 40)}" role="${el.getAttribute("role") || ""}"`
+        );
+    }
+
+    dumpDebugInfo() {
+        const lines = [];
+        const push = (s = "") => lines.push(s);
+
+        push("ACTIVE FRIENDS FILTER v3.1 — DEBUG");
+        push("==================================");
+        push(`window: ${window.innerWidth}x${window.innerHeight}  dpr=${window.devicePixelRatio}`);
+        push(`button mounted: ${!!this.button && document.body.contains(this.button)}`);
+        push(`layer considered open (button hidden): ${this.isLayerOpen()}`);
+        push(`last tick error: ${this.lastError ? this.lastError.message : "none"}`);
+        push("");
+
+        const { presence, relationship } = this.getStores();
+        push(`BdApi.Webpack available: ${!!window.BdApi?.Webpack}`);
+        push(`PresenceStore: ${!!presence}   RelationshipStore: ${!!relationship}`);
+        if (presence) push(`  presence.getActivities is fn: ${typeof presence.getActivities === "function"}`);
+        push("");
+
+        const sidebar = this.resolveSidebar();
+        this.sidebar = sidebar;
+        push("--- SIDEBAR STRATEGY SCOREBOARD (plausible/candidates) ---");
+        for (const [name] of this.sidebarStrategies) {
+            const mark = name === this.sidebarStrategy ? "  <== USING" : "";
+            push(`  ${name.padEnd(20)} ${this.sidebarStats[name]}${mark}`);
+        }
+        push(`Sidebar found: ${!!sidebar}`);
+
+        if (!sidebar) {
+            push("");
+            push("Nothing passed the sidebar test (150-460px wide, >200px tall, >=2 avatars).");
+            push(`Total avatars anywhere in document: ${document.querySelectorAll('img[src*="/avatars/"]').length}`);
+            push("Right-aligned panels currently on screen:");
+            let count = 0;
+            document.querySelectorAll("div").forEach((el) => {
+                const rect = el.getBoundingClientRect();
+                if (Math.abs(rect.right - window.innerWidth) < 8 && rect.height > 200 && count < 15) {
+                    count++;
+                    push(
+                        `  #${count} w=${rect.width.toFixed(0)} h=${rect.height.toFixed(0)} left=${rect.left.toFixed(0)} imgs=${el.querySelectorAll("img").length} class="${(el.className || "").toString().slice(0, 60)}"`
+                    );
+                }
+            });
+            if (count === 0) push("  (none — is the member list open? people icon, top right)");
+            this.showDebugPanel(lines.join("\n"));
+            return;
+        }
+
+        const rect = sidebar.getBoundingClientRect();
+        push(`Sidebar rect: w=${rect.width.toFixed(0)} h=${rect.height.toFixed(0)} left=${rect.left.toFixed(0)}`);
+        push(`Sidebar class: ${(sidebar.className || "").toString().slice(0, 80)}`);
+        push("");
+
+        // --- which row strategy works -------------------------------------
+        const rows = this.resolveRows();
+        push("--- ROW STRATEGY SCOREBOARD ---");
+        push(`Avatars in sidebar: ${this.strategyStats.total}`);
+        for (const [name] of this.rowStrategies) {
+            const hits = this.strategyStats[name];
+            const mark = name === this.rowStrategy ? "  <== USING" : "";
+            push(`  ${name.padEnd(20)} resolved ${hits === undefined ? "n/a" : hits}${mark}`);
+        }
+        push(`content-visibility override injected: ${this.cvOverrideActive}`);
+        push("");
+
+        if (!rows.length) {
+            push("No strategy resolved at least half the avatars. Dumping the raw");
+            push("ancestor chain of the first avatar so the structure is visible:");
+            const first = sidebar.querySelector('img[src*="/avatars/"]');
+            let el = first;
+            for (let i = 0; i < 10 && el?.parentElement; i++) {
+                el = el.parentElement;
+                push("  " + this.describe(el, `[${i}]`));
+            }
+            this.showDebugPanel(lines.join("\n"));
+            return;
+        }
+
+        // --- anatomy of the first resolved row ----------------------------
+        const sample = rows[0];
+        push("--- FIRST ROW ANATOMY ---");
+        push(this.describe(sample.el, "row  "));
+        push(`  innerText="${(sample.el.innerText || "").replace(/\n/g, " | ").slice(0, 60)}"`);
+        push(`  textContent="${(sample.el.textContent || "").replace(/\n/g, " | ").slice(0, 60)}"`);
+        push("  ^ if innerText is empty but textContent is not, the row is unpainted");
+        push("");
+
+        const parent = sample.el.parentElement;
+        if (parent) push(this.describe(parent, "parent"));
+
+        // Siblings — Discord sometimes splits hit-target and visual content
+        // into parallel siblings rather than nesting them.
+        const prev = sample.el.previousElementSibling;
+        const next = sample.el.nextElementSibling;
+        push(prev ? this.describe(prev, "prev sib") : "prev sib: (none)");
+        push(next ? this.describe(next, "next sib") : "next sib: (none)");
+        push(`row child count: ${sample.el.children.length}`);
+        Array.from(sample.el.children)
+            .slice(0, 4)
+            .forEach((c, i) => push("  " + this.describe(c, `child[${i}]`)));
+        push("");
+
+        // --- per-row detection results ------------------------------------
+        push("--- ROWS (store activity vs. scraped text) ---");
+        rows.slice(0, 30).forEach((row, i) => {
+            const h = row.el.getBoundingClientRect().height.toFixed(0);
+            const store = this.activityForUser(row.userId);
+            const friend = this.isFriend(row.userId);
+            const txt = (row.el.textContent || "").replace(/\n/g, " | ").slice(0, 34);
+            push(
+                `#${String(i).padStart(2)} h=${String(h).padStart(3)} id=${row.userId || "?"} ` +
+                    `friend=${friend === null ? "?" : friend} active=${this.rowIsActive(row)}`
+            );
+            push(`     store="${store ? store.label || "(none)" : "STORE UNAVAILABLE"}" text="${txt}"`);
+        });
+        push("");
+
+        // --- conclusions ---------------------------------------------------
+        push("--- READ THIS ---");
+        const anyActive = rows.some((r) => this.rowIsActive(r));
+        if (!presence) {
+            push("• PresenceStore did NOT resolve. Activity detection is falling back to");
+            push("  scraping text, which is language-dependent and misses unpainted rows.");
+        } else {
+            push("• PresenceStore resolved — activity is read from Discord's own state,");
+            push("  independent of what the row rendered or the client language.");
+        }
+        if (this.rowStrategy && this.rowStrategy !== "geometry walk") {
+            push(`• Rows are resolved structurally via "${this.rowStrategy}" — no heights measured,`);
+            push("  so content-visibility / virtualization can no longer break detection.");
+        } else if (this.rowStrategy === "geometry walk") {
+            push("• Falling back to the old geometry walk. Send me this dump; the structural");
+            push("  selectors above need adjusting for your Discord build.");
+        }
+        if (!anyActive) {
+            push("• No row is currently active. Confirm with a friend visibly in-game,");
+            push("  otherwise an empty filter result is correct, not a bug.");
+        }
+        const anyAbsolute = rows.some((r) => getComputedStyle(r.el).position === "absolute");
+        if (anyAbsolute) {
+            push("• Rows are position:absolute — hiding them will leave gaps rather than");
+            push("  compacting the list. Tell me and I'll add transform re-stacking.");
+        }
+
+        this.showDebugPanel(lines.join("\n"));
+    }
+
+    showDebugPanel(text) {
+        document.querySelector(".aff-debug-panel")?.remove();
+        const panel = document.createElement("div");
+        panel.className = "aff-debug-panel";
+
+        const toolbar = document.createElement("div");
+        toolbar.className = "aff-debug-toolbar";
+
+        // No DevTools console here, so make the dump easy to paste elsewhere.
+        const copyBtn = document.createElement("div");
+        copyBtn.innerText = "📋 Copy";
+        copyBtn.addEventListener("click", async () => {
+            try {
+                await navigator.clipboard.writeText(text);
+                copyBtn.innerText = "✓ Copied";
+            } catch (e) {
+                copyBtn.innerText = "✗ Failed";
+            }
+            setTimeout(() => (copyBtn.innerText = "📋 Copy"), 1500);
+        });
+
+        const closeBtn = document.createElement("div");
+        closeBtn.innerText = "✕ Close";
+        closeBtn.addEventListener("click", () => panel.remove());
+
+        toolbar.appendChild(copyBtn);
+        toolbar.appendChild(closeBtn);
+        panel.appendChild(toolbar);
+
+        const body = document.createElement("div");
+        body.innerText = text;
+        panel.appendChild(body);
+
+        document.body.appendChild(panel);
+    }
+};

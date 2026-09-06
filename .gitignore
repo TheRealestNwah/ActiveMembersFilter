@@ -1,0 +1,13 @@
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+*.swp
+
+# Local backups of the plugin
+*.bak
+*.orig
+
+# Node, if tooling is ever added
+node_modules/

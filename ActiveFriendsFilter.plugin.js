@@ -25,7 +25,19 @@ module.exports = class ActiveFriendsFilter {
         this.cvOverrideActive = false;
         this.lastError = null;
 
-        this.stores = { presence: null, relationship: null, resolved: false };
+        this.stores = {
+            presence: null,
+            relationship: null,
+            user: null,
+            guildMember: null,
+            guild: null,
+            selectedGuild: null,
+            resolved: false,
+        };
+
+        this.panel = null;
+        this.panelSignature = null;
+        this.lastCollection = null;
     }
 
     log(...args) {
@@ -94,6 +106,72 @@ module.exports = class ActiveFriendsFilter {
             }
             .aff-hidden-row {
                 display: none !important;
+            }
+            /* Our own member list, painted over Discord's. An overlay rather
+               than DOM surgery inside React's tree, so there is nothing for
+               React to reconcile away on its next render. */
+            .aff-panel {
+                position: fixed;
+                z-index: 9998;
+                box-sizing: border-box;
+                background: var(--background-secondary, #2b2d31);
+                overflow-y: auto;
+                overflow-x: hidden;
+                padding: 8px 0 16px;
+            }
+            .aff-panel-head {
+                padding: 4px 16px 2px;
+                font-size: 12px;
+                font-weight: 700;
+                color: var(--text-muted, #949ba4);
+            }
+            .aff-group-head {
+                padding: 16px 16px 4px;
+                font-size: 12px;
+                font-weight: 600;
+                color: var(--channels-default, #949ba4);
+            }
+            .aff-member {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                margin: 0 8px;
+                padding: 5px 8px;
+                border-radius: 4px;
+            }
+            .aff-member:hover {
+                background: var(--background-modifier-hover, #35373c);
+            }
+            .aff-avatar {
+                width: 32px;
+                height: 32px;
+                border-radius: 50%;
+                flex: 0 0 auto;
+            }
+            .aff-member-text {
+                min-width: 0;
+            }
+            .aff-name {
+                font-size: 14px;
+                font-weight: 500;
+                color: var(--text-normal, #dbdee1);
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .aff-activity {
+                font-size: 12px;
+                color: var(--text-muted, #949ba4);
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .aff-empty {
+                padding: 28px 16px;
+                font-size: 13px;
+                line-height: 1.6;
+                text-align: center;
+                color: var(--text-muted, #949ba4);
             }
             .aff-debug-panel {
                 position: fixed;
@@ -196,11 +274,23 @@ module.exports = class ActiveFriendsFilter {
 
         this.stores.presence = pick("PresenceStore");
         this.stores.relationship = pick("RelationshipStore");
-        this.log("stores resolved", {
-            presence: !!this.stores.presence,
-            relationship: !!this.stores.relationship,
-        });
+        this.stores.user = pick("UserStore");
+        this.stores.guildMember = pick("GuildMemberStore");
+        this.stores.guild = pick("GuildStore");
+        this.stores.selectedGuild = pick("SelectedGuildStore");
+        this.log("stores resolved", this.storeReport());
         return this.stores;
+    }
+
+    storeReport() {
+        return {
+            PresenceStore: !!this.stores.presence,
+            RelationshipStore: !!this.stores.relationship,
+            UserStore: !!this.stores.user,
+            GuildMemberStore: !!this.stores.guildMember,
+            GuildStore: !!this.stores.guild,
+            SelectedGuildStore: !!this.stores.selectedGuild,
+        };
     }
 
     // Discord ActivityType: 0 playing, 1 streaming, 2 listening, 3 watching,
@@ -238,6 +328,154 @@ module.exports = class ActiveFriendsFilter {
         }
     }
 
+    // Richer than activityForUser(): keeps the fields needed to render a row.
+    activityInfoForUser(userId) {
+        const { presence } = this.getStores();
+        if (!presence || !userId || typeof presence.getActivities !== "function") return null;
+        let acts;
+        try {
+            acts = presence.getActivities(userId) || [];
+        } catch (e) {
+            return null;
+        }
+        const real = acts.filter((a) => a && a.type !== 4);
+        if (!real.length) return null;
+
+        const a = real[0];
+        const verb =
+            { 0: "Playing", 1: "Streaming", 2: "Listening to", 3: "Watching", 5: "Competing in" }[
+                a.type
+            ] || "Active:";
+        return { type: a.type, verb, name: a.name || "", label: `${verb} ${a.name || "?"}`.trim() };
+    }
+
+    // ------------------------------------------------- collecting the list
+
+    currentGuildId() {
+        try {
+            return this.stores.selectedGuild?.getGuildId?.() || null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // Every member the client has actually loaded for this guild. Discord
+    // fetches member lists lazily, so this is "everyone known", not
+    // necessarily "everyone in the server" — see README.
+    guildMemberIds(guildId) {
+        const gm = this.stores.guildMember;
+        if (!gm || !guildId) return [];
+        try {
+            if (typeof gm.getMemberIds === "function") return gm.getMemberIds(guildId) || [];
+        } catch (e) {
+            /* fall through */
+        }
+        try {
+            if (typeof gm.getMembers === "function") {
+                return (gm.getMembers(guildId) || [])
+                    .map((m) => m?.userId || m?.user?.id)
+                    .filter(Boolean);
+            }
+        } catch (e) {
+            /* fall through */
+        }
+        return [];
+    }
+
+    // Mirrors how Discord groups the member list: by the member's highest
+    // hoisted role. Members with no hoisted role fall into "Online".
+    groupForMember(guildId, userId) {
+        const fallback = { name: "Online", position: -1 };
+        try {
+            const member = this.stores.guildMember?.getMember?.(guildId, userId);
+            const guild = this.stores.guild?.getGuild?.(guildId);
+            if (!member || !guild?.roles) return fallback;
+            let best = null;
+            for (const roleId of member.roles || []) {
+                const role = guild.roles[roleId];
+                if (role?.hoist && (!best || role.position > best.position)) best = role;
+            }
+            return best ? { name: best.name, position: best.position } : fallback;
+        } catch (e) {
+            return fallback;
+        }
+    }
+
+    displayNameFor(guildId, userId) {
+        try {
+            const member = this.stores.guildMember?.getMember?.(guildId, userId);
+            if (member?.nick) return { name: member.nick, color: member.colorString || null };
+            const user = this.stores.user?.getUser?.(userId);
+            return {
+                name: user?.globalName || user?.username || userId,
+                color: member?.colorString || null,
+            };
+        } catch (e) {
+            return { name: userId, color: null };
+        }
+    }
+
+    avatarUrlFor(guildId, userId) {
+        try {
+            const user = this.stores.user?.getUser?.(userId);
+            if (user?.getAvatarURL) {
+                const url = user.getAvatarURL(guildId, 40);
+                if (url) return url;
+            }
+            if (user?.avatar) {
+                return `https://cdn.discordapp.com/avatars/${userId}/${user.avatar}.webp?size=40`;
+            }
+        } catch (e) {
+            /* fall through to the default avatar */
+        }
+        return "https://cdn.discordapp.com/embed/avatars/0.png";
+    }
+
+    // Builds the grouped list of active members. Store data is the source of
+    // truth; user ids scraped from rendered rows are folded in as a safety net
+    // so this can never do worse than the old DOM-only approach.
+    collectActiveMembers() {
+        this.getStores();
+        const guildId = this.currentGuildId();
+        const storeIds = this.guildMemberIds(guildId);
+        const domIds = this.resolveRows()
+            .map((r) => r.userId)
+            .filter(Boolean);
+
+        const ids = Array.from(new Set([...storeIds, ...domIds]));
+        const byGroup = new Map();
+        let total = 0;
+
+        for (const id of ids) {
+            const activity = this.activityInfoForUser(id);
+            if (!activity) continue;
+            const group = this.groupForMember(guildId, id);
+            const { name, color } = this.displayNameFor(guildId, id);
+            const entry = { id, name, color, activity, avatar: this.avatarUrlFor(guildId, id) };
+
+            if (!byGroup.has(group.name)) {
+                byGroup.set(group.name, { name: group.name, position: group.position, members: [] });
+            }
+            byGroup.get(group.name).members.push(entry);
+            total++;
+        }
+
+        // Higher role position sorts first, matching Discord's own ordering;
+        // the ungrouped "Online" bucket (position -1) lands last.
+        const groups = Array.from(byGroup.values()).sort((a, b) => b.position - a.position);
+        for (const g of groups) g.members.sort((a, b) => a.name.localeCompare(b.name));
+
+        this.lastCollection = {
+            guildId,
+            storeIds: storeIds.length,
+            domIds: domIds.length,
+            considered: ids.length,
+            total,
+            groups,
+        };
+        return this.lastCollection;
+    }
+
     // --------------------------------------------------------------- sidebar
 
     tick() {
@@ -248,6 +486,7 @@ module.exports = class ActiveFriendsFilter {
 
             const layerOpen = this.isLayerOpen();
             this.button.style.display = layerOpen ? "none" : "flex";
+            if (this.panel) this.panel.style.display = layerOpen ? "none" : "block";
             if (layerOpen) return;
 
             const sidebar = this.resolveSidebar();
@@ -260,6 +499,7 @@ module.exports = class ActiveFriendsFilter {
             this.updateButtonLabel();
 
             if (this.active && this.sidebar) this.applyFilter();
+            else if (this.active) this.removePanel(); // sidebar went away
         } catch (e) {
             this.lastError = e;
             console.error("[ActiveFriendsFilter] tick failed:", e);
@@ -466,27 +706,120 @@ module.exports = class ActiveFriendsFilter {
     }
 
     applyFilter() {
-        const rows = this.resolveRows();
-        let shown = 0;
-        rows.forEach((row) => {
-            if (!this.active) {
-                row.el.classList.remove("aff-hidden-row");
-                shown++;
-                return;
+        if (!this.active) {
+            this.removePanel();
+            return;
+        }
+
+        const data = this.collectActiveMembers();
+
+        // Rebuilding the DOM every tick would reset scroll position and flicker,
+        // so only re-render when the membership or their activities change.
+        const signature = JSON.stringify([
+            data.guildId,
+            data.groups.map((g) => [g.name, g.members.map((m) => `${m.id}:${m.activity.label}`)]),
+        ]);
+
+        if (!this.panel || !document.body.contains(this.panel)) {
+            this.buildPanel();
+            this.panelSignature = null;
+        }
+        if (signature !== this.panelSignature) {
+            this.renderPanel(data);
+            this.panelSignature = signature;
+            this.log(`panel rendered: ${data.total} active of ${data.considered} known members`);
+        }
+        this.positionPanel();
+    }
+
+    buildPanel() {
+        this.removePanel();
+        const panel = document.createElement("div");
+        panel.className = "aff-panel";
+        document.body.appendChild(panel);
+        this.panel = panel;
+    }
+
+    removePanel() {
+        document.querySelectorAll(".aff-panel").forEach((el) => el.remove());
+        this.panel = null;
+        this.panelSignature = null;
+    }
+
+    positionPanel() {
+        if (!this.panel || !this.sidebar) return;
+        const r = this.sidebar.getBoundingClientRect();
+        this.panel.style.top = `${r.top}px`;
+        this.panel.style.left = `${r.left}px`;
+        this.panel.style.width = `${r.width}px`;
+        this.panel.style.height = `${r.height}px`;
+    }
+
+    renderPanel(data) {
+        const panel = this.panel;
+        if (!panel) return;
+        panel.textContent = "";
+
+        const head = document.createElement("div");
+        head.className = "aff-panel-head";
+        head.textContent = `ACTIVE — ${data.total}`;
+        panel.appendChild(head);
+
+        if (!data.total) {
+            const empty = document.createElement("div");
+            empty.className = "aff-empty";
+            empty.textContent = data.considered
+                ? "Nobody here is playing, streaming, listening or watching right now."
+                : "No members loaded yet. Scroll the member list once, then try again.";
+            panel.appendChild(empty);
+            return;
+        }
+
+        for (const group of data.groups) {
+            // The header is created alongside its members, so a group with
+            // nobody in it can never produce a stray heading.
+            const groupHead = document.createElement("div");
+            groupHead.className = "aff-group-head";
+            groupHead.textContent = `${group.name} — ${group.members.length}`;
+            panel.appendChild(groupHead);
+
+            for (const member of group.members) {
+                const row = document.createElement("div");
+                row.className = "aff-member";
+
+                const img = document.createElement("img");
+                img.className = "aff-avatar";
+                img.src = member.avatar;
+                img.alt = "";
+                row.appendChild(img);
+
+                const text = document.createElement("div");
+                text.className = "aff-member-text";
+
+                // Names and activity strings are user-controlled, so they are
+                // set as text. Never innerHTML here.
+                const name = document.createElement("div");
+                name.className = "aff-name";
+                name.textContent = member.name;
+                if (member.color) name.style.color = member.color;
+
+                const activity = document.createElement("div");
+                activity.className = "aff-activity";
+                activity.textContent = member.activity.label;
+
+                text.appendChild(name);
+                text.appendChild(activity);
+                row.appendChild(text);
+                panel.appendChild(row);
             }
-            const active = this.rowIsActive(row);
-            row.el.classList.toggle("aff-hidden-row", !active);
-            if (active) shown++;
-        });
-        this.log(
-            `filter applied via "${this.rowStrategy}": ${rows.length} rows scanned, ${shown} shown`
-        );
+        }
     }
 
     showAll() {
         document
             .querySelectorAll(".aff-hidden-row")
             .forEach((el) => el.classList.remove("aff-hidden-row"));
+        this.removePanel();
     }
 
     // --------------------------------------------------------------- button
@@ -577,9 +910,11 @@ module.exports = class ActiveFriendsFilter {
         push(`last tick error: ${this.lastError ? this.lastError.message : "none"}`);
         push("");
 
-        const { presence, relationship } = this.getStores();
+        const { presence } = this.getStores();
         push(`BdApi.Webpack available: ${!!window.BdApi?.Webpack}`);
-        push(`PresenceStore: ${!!presence}   RelationshipStore: ${!!relationship}`);
+        for (const [name, ok] of Object.entries(this.storeReport())) {
+            push(`  ${ok ? "OK  " : "MISS"} ${name}`);
+        }
         if (presence) push(`  presence.getActivities is fn: ${typeof presence.getActivities === "function"}`);
         push("");
 
@@ -651,6 +986,24 @@ module.exports = class ActiveFriendsFilter {
         if (missingId > 0) {
             push("→ Some rows yielded no user id (server-specific or default avatars),");
             push("  so those fall back to text scraping instead of PresenceStore.");
+        }
+        push("");
+
+        // What the rendered panel actually works from — independent of the DOM.
+        const collection = this.collectActiveMembers();
+        push("--- OWN LIST (what the panel renders) ---");
+        push(`Guild id:                     ${collection.guildId || "none"}`);
+        push(`Member ids from stores:       ${collection.storeIds}`);
+        push(`Member ids from rendered DOM: ${collection.domIds}`);
+        push(`Unique members considered:    ${collection.considered}`);
+        push(`Active members found:         ${collection.total}`);
+        collection.groups.forEach((g) => {
+            push(`  ${g.name} — ${g.members.length}`);
+            g.members.forEach((m) => push(`      ${m.name}: ${m.activity.label}`));
+        });
+        if (!collection.storeIds) {
+            push("→ Stores returned no members, so the panel is falling back to the");
+            push("  rendered DOM only, which is subject to virtualization.");
         }
         push("");
 

@@ -1,12 +1,12 @@
 # ActiveFriendsFilter
 
 A [BetterDiscord](https://betterdiscord.app/) plugin that adds a toggle button above the
-server member list, filtering it down to only the members who are currently **doing
-something** — playing a game, listening to Spotify, streaming, or watching along.
+server member list. Switch it on and the member list is replaced by a list of only the
+people currently **doing something** — playing a game, listening to Spotify, streaming, or
+watching along.
 
-> **Status: work in progress.** The button, sidebar detection and debug tooling are
-> working. Row-level filtering is implemented but has not yet been confirmed against a
-> live member list. See [Known issues](#known-issues).
+> **Status: work in progress.** Not released anywhere; the version stays at `1.0.0` until
+> it is confirmed working. See [Known issues](#known-issues).
 
 ## Install
 
@@ -20,7 +20,7 @@ On Windows you can run `.\install.ps1` from this folder to do step 1 for you.
 
 ## Usage
 
-A small pill-shaped button appears at the top of the member list.
+A small pill-shaped button sits at the top of the member list.
 
 | Button reads | Meaning |
 | --- | --- |
@@ -28,31 +28,51 @@ A small pill-shaped button appears at the top of the member list.
 | `🎮 Showing Active Only` | Filter is on. Click to restore the full list. |
 | `🎮 No member list` (dimmed, dashed) | Nothing detected. Click for the debug panel. |
 
-**Right-click the button** at any time to open an on-screen debug panel. It reports which
-detection strategy won, what Discord's own stores say about each member, and the computed
-styles of the row elements. The panel has a **📋 Copy** button so the dump can be pasted
-into an issue without needing DevTools.
+**Right-click the button** at any time for an on-screen debug panel reporting which
+detection strategy won, which Discord stores resolved, and what the plugin believes about
+every member. It has a **📋 Copy** button, so the dump can go into an issue without
+needing DevTools.
 
-## How detection works
+## How it works
+
+### Why it renders its own list
+
+The obvious approach — hide the member rows that aren't active — does not work. Discord's
+member list is **virtualized**: only rows near the viewport exist in the DOM at all. Hiding
+rows also shortens the scroll content, so Discord never renders the next batch, which
+pins the result to whoever happened to be on screen when you toggled it.
+
+So the plugin does not filter Discord's list. It reads the underlying state, builds its own
+list, and paints it over the member list as an overlay. An overlay rather than DOM surgery
+inside React's tree means there is nothing for React to reconcile away on its next render.
+
+### Where the data comes from
+
+Everything comes from Discord's own Flux stores through `BdApi.Webpack`:
+
+| Store | Used for |
+| --- | --- |
+| `SelectedGuildStore` | Which server is open |
+| `GuildMemberStore` | Member ids, nicknames, role ids, name colour |
+| `GuildStore` | Role names, hoist flag, position |
+| `PresenceStore` | Each member's current activities |
+| `UserStore` | Usernames and avatar URLs |
+
+Activity types 0/1/2/3/5 (playing, streaming, listening, watching, competing) count as
+active; type 4 (custom status) does not. Members are grouped by their highest **hoisted**
+role, ordered by role position, exactly as Discord groups them — and a group header is only
+created alongside its members, so an empty group can never render a stray heading.
+
+User ids scraped from rendered avatars are folded in as a safety net, so the result can
+never be worse than the DOM-only approach it replaced.
+
+### Finding the member list
 
 Discord ships obfuscated, hash-suffixed class names that change between builds, so nothing
-here matches on a literal class name alone. Each layer tries several strategies in order
-and keeps the first that actually works, reporting the scoreboard in the debug panel.
-
-**Finding the member list** — `membersWrap` class → `members_` class → `role="list"` →
-geometry (a tall narrow column flush against the right edge). Every candidate must then
-pass a plausibility check: 150–460px wide, over 200px tall, containing at least two avatars.
-
-**Finding individual rows** — from each avatar `<img>`, walk to the nearest ancestor
-matching `data-list-item-id` → `role="listitem"` → a `member__` class → (last resort) a
-geometry walk. Any candidate wrapping more than one avatar is rejected, which is what
-excludes the virtualized scroll container without needing to know its height.
-
-**Deciding who is active** — the user ID is read straight out of the avatar URL
-(`/avatars/<snowflake>/`), then handed to Discord's own `PresenceStore` via
-`BdApi.Webpack`. Activity types 0/1/2/3/5 (playing, streaming, listening, watching,
-competing) count as active; type 4 (custom status) does not. If the store can't be
-resolved, it falls back to matching text in the row.
+matches on a literal class name alone. Several strategies are tried in order — `membersWrap`
+class → `members_` class → `role="list"` → geometry — and the first that works wins, with
+the full scoreboard shown in the debug panel. Candidates must be 150–460px wide, over 200px
+tall, and contain at least two avatars.
 
 ## Debugging notes
 
@@ -61,34 +81,37 @@ Kept because these cost real time to work out.
 **Rows measured 2px tall.** Walking up from an avatar reached the right element, but
 `getBoundingClientRect()` reported `h=2` for every row except the one that happened to be
 painted. Discord uses `content-visibility: auto` on the member list; a skipped element
-reports only its **padding box**, and the row carries 1px of padding top and bottom —
-hence exactly 2px. The fix was not to force the property off but to **stop measuring
-rows at all** and match on structure instead.
+reports only its **padding box**, and the row carries 1px of padding top and bottom — hence
+exactly 2px.
 
 **`innerText` is layout-aware.** It returns `""` for a subtree the browser has skipped
-rendering. The original activity check scraped `innerText`, so it saw text on exactly one
-row — the same painted row above. Both symptoms had one cause. Use `textContent` when
-reading unpainted DOM.
+rendering, so scraping `innerText` saw text on exactly one row — the same painted row.
+Both symptoms had one cause. Use `textContent` when reading unpainted DOM.
 
-**Scraped text is a bad signal anyway.** Matching on `"Playing "` / `"Listening to"`
-breaks on any non-English client, and the member list often doesn't render an activity
-line at all. `PresenceStore` is authoritative and language-independent.
+**Scraped text is a bad signal anyway.** Matching on `"Playing "` / `"Listening to"` breaks
+on any non-English client, and the member list often doesn't render an activity line at
+all. `PresenceStore` is authoritative and language-independent.
 
 **Don't gate your debug UI behind the thing you're debugging.** An early version only
-created the button *after* the member list was found, and bailed out of the update loop if
-any `layerContainer` element had children — which is true for tooltips and popouts, not
-just modals. Net effect: the button never appeared, and the debug panel it opened was the
-only way to find out why. The button now mounts unconditionally and reports its own state.
+created the button *after* the member list was found, so when detection failed there was no
+button — and the debug panel it opened was the only way to find out why. The button now
+mounts unconditionally and reports its own state.
+
+**`layerContainer` is always present and full-screen.** A "is a modal covering the app?"
+check measured that container's own rect. Since Discord keeps it mounted permanently as a
+full-viewport overlay, any child at all — a tooltip, a hover card — made it look like a
+fullscreen modal, and the button was hidden a tick after being created. Measure the
+*children*, not the container.
 
 ## Known issues
 
-- **Row filtering is unverified.** The structural selectors above are implemented but have
-  not yet been confirmed against a live member list.
-- **Hidden rows may leave gaps.** Discord's member list is virtualized. If rows turn out to
-  be `position: absolute`, hiding one leaves a hole rather than compacting the list. The
-  debug panel flags this if it applies; the fix would be re-stacking each row's
-  `translateY`.
+- **Bounded by what Discord has loaded.** Discord fetches guild member lists lazily, so
+  `GuildMemberStore` only knows the members the client has actually received. In a large
+  server the panel shows the active people among those, not all of them. Nothing
+  client-side can enumerate a 10,000-member guild that was never fetched.
 - **Only the server member list.** The Friends tab and DM list are not touched.
+- **Rows are not clickable.** The panel is presentational; clicking a member does not open
+  their profile yet.
 
 ## License
 

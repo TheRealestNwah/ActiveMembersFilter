@@ -4,7 +4,7 @@
  * @source https://github.com/TheRealestNwah/ActiveFriendsFilter
  * @website https://github.com/TheRealestNwah/ActiveFriendsFilter
  * @description Adds a toggle button above the server member list that filters it down to members currently playing a game, listening to Spotify, streaming or watching something.
- * @version 3.1.0
+ * @version 3.1.1
  */
 
 module.exports = class ActiveFriendsFilter {
@@ -62,8 +62,8 @@ module.exports = class ActiveFriendsFilter {
         style.textContent = `
             .aff-toggle-btn {
                 position: fixed;
-                top: 12px;
-                right: 12px;
+                top: 90px;
+                right: 20px;
                 z-index: 9999;
                 display: flex;
                 align-items: center;
@@ -266,17 +266,21 @@ module.exports = class ActiveFriendsFilter {
         }
     }
 
-    // A layer only counts as "open" if it actually covers the app. Tooltips,
-    // popouts and Discord's persistent mount points also live in layerContainer,
-    // and treating any of those as a modal hid the button permanently.
+    // A layer only counts as "open" if something in it actually covers the app.
+    // Measure the CHILDREN, not the container: Discord's layerContainer is
+    // itself a permanently present, full-viewport fixed overlay, so measuring
+    // the container marks every tooltip and popout as a fullscreen modal and
+    // hides the button forever.
     isLayerOpen() {
         const viewport = window.innerWidth * window.innerHeight;
         if (!viewport) return false;
-        return Array.from(document.querySelectorAll('[class*="layerContainer"]')).some((el) => {
-            if (!el.children.length) return false;
-            const r = el.getBoundingClientRect();
-            return (r.width * r.height) / viewport > 0.4;
-        });
+        for (const container of document.querySelectorAll('[class*="layerContainer"]')) {
+            for (const child of container.children) {
+                const r = child.getBoundingClientRect();
+                if ((r.width * r.height) / viewport > 0.4) return true;
+            }
+        }
+        return false;
     }
 
     // --------------------------------------------------------------- sidebar
@@ -534,9 +538,11 @@ module.exports = class ActiveFriendsFilter {
     positionButton() {
         if (!this.button) return;
         if (!this.sidebar) {
+            // Parked below Discord's title bar and search field, not under the
+            // window controls where it is easy to miss.
             this.button.style.left = "";
-            this.button.style.right = "12px";
-            this.button.style.top = "12px";
+            this.button.style.right = "20px";
+            this.button.style.top = "90px";
             return;
         }
         const rect = this.sidebar.getBoundingClientRect();

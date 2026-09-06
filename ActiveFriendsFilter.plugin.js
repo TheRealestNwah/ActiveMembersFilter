@@ -277,6 +277,7 @@ module.exports = class ActiveFriendsFilter {
         this.stores.user = pick("UserStore");
         this.stores.guildMember = pick("GuildMemberStore");
         this.stores.guild = pick("GuildStore");
+        this.stores.guildRole = pick("GuildRoleStore");
         this.stores.selectedGuild = pick("SelectedGuildStore");
         this.log("stores resolved", this.storeReport());
         return this.stores;
@@ -289,6 +290,7 @@ module.exports = class ActiveFriendsFilter {
             UserStore: !!this.stores.user,
             GuildMemberStore: !!this.stores.guildMember,
             GuildStore: !!this.stores.guild,
+            GuildRoleStore: !!this.stores.guildRole,
             SelectedGuildStore: !!this.stores.selectedGuild,
         };
     }
@@ -382,28 +384,56 @@ module.exports = class ActiveFriendsFilter {
         return [];
     }
 
-    // Mirrors how Discord groups the member list: by the member's highest
-    // hoisted role. Members with no hoisted role fall into "Online".
-    groupForMember(guildId, userId) {
-        const fallback = { name: "Online", position: -1 };
+    safeMember(guildId, userId) {
         try {
-            const member = this.stores.guildMember?.getMember?.(guildId, userId);
-            const guild = this.stores.guild?.getGuild?.(guildId);
-            if (!member || !guild?.roles) return fallback;
-            let best = null;
-            for (const roleId of member.roles || []) {
-                const role = guild.roles[roleId];
-                if (role?.hoist && (!best || role.position > best.position)) best = role;
-            }
-            return best ? { name: best.name, position: best.position } : fallback;
+            return this.stores.guildMember?.getMember?.(guildId, userId) || null;
         } catch (e) {
-            return fallback;
+            return null;
         }
     }
 
-    displayNameFor(guildId, userId) {
+    // Discord has moved guild roles between stores across builds: newer clients
+    // expose GuildRoleStore.getRoles(guildId), some expose GuildStore.getRoles(),
+    // older ones keep them on the guild record itself. Try each in turn, since
+    // reading only guild.roles silently yields no roles on a build that moved
+    // them — which collapses every member into the ungrouped bucket.
+    rolesForGuild(guildId) {
+        if (!guildId) return null;
+        const sources = [
+            ["GuildRoleStore.getRoles", () => this.stores.guildRole?.getRoles?.(guildId)],
+            ["GuildStore.getRoles", () => this.stores.guild?.getRoles?.(guildId)],
+            ["guild.roles", () => this.stores.guild?.getGuild?.(guildId)?.roles],
+        ];
+        for (const [name, fn] of sources) {
+            try {
+                const roles = fn();
+                if (roles && Object.keys(roles).length) {
+                    this.roleSource = name;
+                    return roles;
+                }
+            } catch (e) {
+                /* try the next source */
+            }
+        }
+        this.roleSource = "none";
+        return null;
+    }
+
+    // Mirrors how Discord groups the member list: by the member's highest
+    // hoisted role. Members with no hoisted role fall into "Online".
+    groupFromMember(member, roles) {
+        const fallback = { name: "Online", position: -1 };
+        if (!member || !roles) return fallback;
+        let best = null;
+        for (const roleId of member.roles || []) {
+            const role = roles[roleId];
+            if (role?.hoist && (!best || role.position > best.position)) best = role;
+        }
+        return best ? { name: best.name, position: best.position } : fallback;
+    }
+
+    displayNameFor(userId, member) {
         try {
-            const member = this.stores.guildMember?.getMember?.(guildId, userId);
             if (member?.nick) return { name: member.nick, color: member.colorString || null };
             const user = this.stores.user?.getUser?.(userId);
             return {
@@ -443,14 +473,19 @@ module.exports = class ActiveFriendsFilter {
             .filter(Boolean);
 
         const ids = Array.from(new Set([...storeIds, ...domIds]));
+        const roles = this.rolesForGuild(guildId);
+        const hoistedRoles = roles ? Object.values(roles).filter((r) => r?.hoist).length : 0;
         const byGroup = new Map();
         let total = 0;
+        let withRecord = 0;
 
         for (const id of ids) {
             const activity = this.activityInfoForUser(id);
             if (!activity) continue;
-            const group = this.groupForMember(guildId, id);
-            const { name, color } = this.displayNameFor(guildId, id);
+            const member = this.safeMember(guildId, id);
+            if (member) withRecord++;
+            const group = this.groupFromMember(member, roles);
+            const { name, color } = this.displayNameFor(id, member);
             const entry = { id, name, color, activity, avatar: this.avatarUrlFor(guildId, id) };
 
             if (!byGroup.has(group.name)) {
@@ -472,6 +507,10 @@ module.exports = class ActiveFriendsFilter {
             considered: ids.length,
             total,
             groups,
+            roleSource: this.roleSource || "none",
+            rolesFound: roles ? Object.keys(roles).length : 0,
+            hoistedRoles,
+            activeWithMemberRecord: withRecord,
         };
         return this.lastCollection;
     }
@@ -595,7 +634,15 @@ module.exports = class ActiveFriendsFilter {
     // are /embed/avatars/<0-5>.png, which also contain "/avatars/" but carry
     // no user id — the digit-length check separates them.
     userIdFromAvatar(img) {
-        const m = /\/avatars\/(\d{16,21})\//.exec(img.getAttribute("src") || "");
+        const src = img.getAttribute("src") || "";
+        // Server-specific avatar: /guilds/<guildId>/users/<userId>/avatars/<hash>.
+        // Must be tested first — it also contains "/avatars/", but followed by
+        // the hash rather than the id.
+        const guildAvatar = /\/guilds\/\d+\/users\/(\d{16,21})\//.exec(src);
+        if (guildAvatar) return guildAvatar[1];
+        // Normal avatar: /avatars/<userId>/<hash>. Default avatars are
+        // /embed/avatars/<0-5>.png and carry no id at all.
+        const m = /\/avatars\/(\d{16,21})\//.exec(src);
         return m ? m[1] : null;
     }
 
@@ -997,6 +1044,19 @@ module.exports = class ActiveFriendsFilter {
         push(`Member ids from rendered DOM: ${collection.domIds}`);
         push(`Unique members considered:    ${collection.considered}`);
         push(`Active members found:         ${collection.total}`);
+        push(`Role source:                  ${collection.roleSource}`);
+        push(`Roles in guild:               ${collection.rolesFound} (${collection.hoistedRoles} hoisted)`);
+        push(`Active with a member record:  ${collection.activeWithMemberRecord}/${collection.total}`);
+        if (collection.rolesFound === 0) {
+            push("→ No roles resolved from any store: grouping cannot work, everyone");
+            push("  falls into the ungrouped bucket. This is a bug, report it.");
+        } else if (collection.hoistedRoles === 0) {
+            push("→ Roles resolved but none are hoisted (\"Display separately\" off),");
+            push("  so a single ungrouped list is CORRECT for this server.");
+        } else if (collection.activeWithMemberRecord < collection.total) {
+            push("→ Some active members have no loaded member record, so their roles");
+            push("  are unknown and they fall into the ungrouped bucket.");
+        }
         collection.groups.forEach((g) => {
             push(`  ${g.name} — ${g.members.length}`);
             g.members.forEach((m) => push(`      ${m.name}: ${m.activity.label}`));

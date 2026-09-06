@@ -4,7 +4,7 @@
  * @source https://github.com/TheRealestNwah/ActiveFriendsFilter
  * @website https://github.com/TheRealestNwah/ActiveFriendsFilter
  * @description Adds a toggle button above the server member list that filters it down to members currently playing a game, listening to Spotify, streaming or watching something.
- * @version 3.1.1
+ * @version 1.0.0
  */
 
 module.exports = class ActiveFriendsFilter {
@@ -569,8 +569,8 @@ module.exports = class ActiveFriendsFilter {
         const lines = [];
         const push = (s = "") => lines.push(s);
 
-        push("ACTIVE FRIENDS FILTER v3.1 — DEBUG");
-        push("==================================");
+        push("ACTIVE FRIENDS FILTER — DEBUG");
+        push("=============================");
         push(`window: ${window.innerWidth}x${window.innerHeight}  dpr=${window.devicePixelRatio}`);
         push(`button mounted: ${!!this.button && document.body.contains(this.button)}`);
         push(`layer considered open (button hidden): ${this.isLayerOpen()}`);
@@ -627,6 +627,31 @@ module.exports = class ActiveFriendsFilter {
             push(`  ${name.padEnd(20)} resolved ${hits === undefined ? "n/a" : hits}${mark}`);
         }
         push(`content-visibility override injected: ${this.cvOverrideActive}`);
+        push("");
+
+        // Coverage check. Discord's role group headers read "Minion — 10", so
+        // summing them gives the number of members the list *claims* to hold.
+        // If that is well above the number of rows actually in the DOM, the
+        // list is virtualized and the missing members were never rendered —
+        // no amount of CSS hiding can reveal something that does not exist.
+        push("--- COVERAGE ---");
+        const declared = ((sidebar.textContent || "").match(/—\s*\d+/g) || []).reduce(
+            (n, s) => n + parseInt(s.replace(/\D/g, ""), 10),
+            0
+        );
+        const missingId = rows.filter((r) => !r.userId).length;
+        push(`Members declared by group headers: ${declared}`);
+        push(`Avatars in sidebar:                ${this.strategyStats.total}`);
+        push(`Rows resolved:                     ${rows.length}`);
+        push(`Rows with no parsable user id:     ${missingId}`);
+        if (declared > rows.length) {
+            push("→ VIRTUALIZED: members beyond the rendered window are absent from");
+            push("  the DOM entirely. Filtering can only ever affect what is rendered.");
+        }
+        if (missingId > 0) {
+            push("→ Some rows yielded no user id (server-specific or default avatars),");
+            push("  so those fall back to text scraping instead of PresenceStore.");
+        }
         push("");
 
         if (!rows.length) {

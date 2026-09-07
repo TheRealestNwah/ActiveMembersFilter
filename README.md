@@ -1,4 +1,4 @@
-# ActiveFriendsFilter
+# ActiveMembersFilter
 
 A [BetterDiscord](https://betterdiscord.app/) plugin that adds a toggle button above the
 server member list. Switch it on and the member list is replaced by a list of only the
@@ -11,7 +11,7 @@ watching along.
 
 ## Install
 
-1. Copy `ActiveFriendsFilter.plugin.js` into your BetterDiscord plugins folder:
+1. Copy `ActiveMembersFilter.plugin.js` into your BetterDiscord plugins folder:
    - Windows: `%APPDATA%\BetterDiscord\plugins`
    - macOS: `~/Library/Application Support/BetterDiscord/plugins`
    - Linux: `~/.config/BetterDiscord/plugins`

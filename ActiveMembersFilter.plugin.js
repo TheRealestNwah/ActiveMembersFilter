@@ -1,19 +1,19 @@
 /**
- * @name ActiveFriendsFilter
+ * @name ActiveMembersFilter
  * @author TheRealestNwah
- * @source https://github.com/TheRealestNwah/ActiveFriendsFilter
- * @website https://github.com/TheRealestNwah/ActiveFriendsFilter
+ * @source https://github.com/TheRealestNwah/ActiveMembersFilter
+ * @website https://github.com/TheRealestNwah/ActiveMembersFilter
  * @description Adds a toggle button above the server member list that filters it down to members currently playing a game, listening to Spotify, streaming or watching something.
  * @version 1.0.0
  */
 
-module.exports = class ActiveFriendsFilter {
+module.exports = class ActiveMembersFilter {
     constructor() {
         this.active = false;
         this.button = null;
         this.sidebar = null;
-        this.styleId = "aff-style";
-        this.cvStyleId = "aff-cv-style";
+        this.styleId = "amf-style";
+        this.cvStyleId = "amf-cv-style";
         this.DEBUG = true; // set to false to silence console logs
 
         // Populated by the resolvers so the debug panel can report what worked.
@@ -45,7 +45,7 @@ module.exports = class ActiveFriendsFilter {
     }
 
     log(...args) {
-        if (this.DEBUG) console.log("[ActiveFriendsFilter]", ...args);
+        if (this.DEBUG) console.log("[ActiveMembersFilter]", ...args);
     }
 
     start() {
@@ -64,7 +64,7 @@ module.exports = class ActiveFriendsFilter {
         this.active = false;
         this.showAll();
         this.removeStyles();
-        document.querySelector(".aff-debug-panel")?.remove();
+        document.querySelector(".amf-debug-panel")?.remove();
         if (this.button) this.button.remove();
         this.button = null;
         this.sidebar = null;
@@ -78,7 +78,7 @@ module.exports = class ActiveFriendsFilter {
         style.textContent = `
             /* Preferred home: an icon button in the channel header toolbar,
                sized and coloured like Discord's own icons there. */
-            .aff-toggle-btn.aff-in-toolbar {
+            .amf-toggle-btn.amf-in-toolbar {
                 position: relative;
                 display: flex;
                 align-items: center;
@@ -94,24 +94,24 @@ module.exports = class ActiveFriendsFilter {
                 cursor: pointer;
                 color: var(--interactive-normal, #b5bac1);
             }
-            .aff-toggle-btn.aff-in-toolbar:hover {
+            .amf-toggle-btn.amf-in-toolbar:hover {
                 color: var(--interactive-hover, #dbdee1);
             }
-            .aff-toggle-btn.aff-in-toolbar.aff-active {
+            .amf-toggle-btn.amf-in-toolbar.amf-active {
                 color: var(--brand-experiment, #5865f2);
             }
-            .aff-toggle-btn.aff-in-toolbar.aff-idle {
+            .amf-toggle-btn.amf-in-toolbar.amf-idle {
                 opacity: 0.4;
             }
-            .aff-toggle-btn.aff-in-toolbar .aff-label {
+            .amf-toggle-btn.amf-in-toolbar .amf-label {
                 display: none;
             }
-            .aff-toggle-btn svg {
+            .amf-toggle-btn svg {
                 width: 24px;
                 height: 24px;
             }
             /* Fallback if the toolbar can't be found: the old floating pill. */
-            .aff-toggle-btn.aff-floating {
+            .amf-toggle-btn.amf-floating {
                 position: fixed;
                 top: 90px;
                 right: 20px;
@@ -131,29 +131,29 @@ module.exports = class ActiveFriendsFilter {
                 box-shadow: 0 2px 6px rgba(0,0,0,0.3);
                 white-space: nowrap;
             }
-            .aff-toggle-btn.aff-floating:hover {
+            .amf-toggle-btn.amf-floating:hover {
                 background: var(--background-modifier-hover, #35373c);
             }
-            .aff-toggle-btn.aff-floating.aff-active {
+            .amf-toggle-btn.amf-floating.amf-active {
                 background: var(--brand-experiment, #5865f2);
                 color: #fff;
                 border-color: var(--brand-experiment, #5865f2);
             }
-            .aff-toggle-btn.aff-floating.aff-idle {
+            .amf-toggle-btn.amf-floating.amf-idle {
                 opacity: 0.75;
                 border-style: dashed;
             }
-            .aff-toggle-btn.aff-floating svg {
+            .amf-toggle-btn.amf-floating svg {
                 width: 16px;
                 height: 16px;
             }
-            .aff-hidden-row {
+            .amf-hidden-row {
                 display: none !important;
             }
             /* Our own member list, painted over Discord's. An overlay rather
                than DOM surgery inside React's tree, so there is nothing for
                React to reconcile away on its next render. */
-            .aff-panel {
+            .amf-panel {
                 position: fixed;
                 z-index: 9998;
                 box-sizing: border-box;
@@ -162,19 +162,19 @@ module.exports = class ActiveFriendsFilter {
                 overflow-x: hidden;
                 padding: 8px 0 16px;
             }
-            .aff-panel-head {
+            .amf-panel-head {
                 padding: 4px 16px 2px;
                 font-size: 12px;
                 font-weight: 700;
                 color: var(--text-muted, #949ba4);
             }
-            .aff-group-head {
+            .amf-group-head {
                 padding: 16px 16px 4px;
                 font-size: 12px;
                 font-weight: 600;
                 color: var(--channels-default, #949ba4);
             }
-            .aff-member {
+            .amf-member {
                 display: flex;
                 align-items: center;
                 gap: 12px;
@@ -183,22 +183,22 @@ module.exports = class ActiveFriendsFilter {
                 border-radius: 4px;
                 cursor: pointer;
             }
-            .aff-member:hover {
+            .amf-member:hover {
                 background: var(--background-modifier-hover, #35373c);
             }
-            .aff-member:active {
+            .amf-member:active {
                 background: var(--background-modifier-selected, #3f4147);
             }
-            .aff-avatar {
+            .amf-avatar {
                 width: 32px;
                 height: 32px;
                 border-radius: 50%;
                 flex: 0 0 auto;
             }
-            .aff-member-text {
+            .amf-member-text {
                 min-width: 0;
             }
-            .aff-name {
+            .amf-name {
                 font-size: 14px;
                 font-weight: 500;
                 color: var(--text-normal, #dbdee1);
@@ -206,21 +206,21 @@ module.exports = class ActiveFriendsFilter {
                 overflow: hidden;
                 text-overflow: ellipsis;
             }
-            .aff-activity {
+            .amf-activity {
                 font-size: 12px;
                 color: var(--text-muted, #949ba4);
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
             }
-            .aff-empty {
+            .amf-empty {
                 padding: 28px 16px;
                 font-size: 13px;
                 line-height: 1.6;
                 text-align: center;
                 color: var(--text-muted, #949ba4);
             }
-            .aff-debug-panel {
+            .amf-debug-panel {
                 position: fixed;
                 z-index: 10000;
                 top: 60px;
@@ -239,7 +239,7 @@ module.exports = class ActiveFriendsFilter {
                 white-space: pre-wrap;
                 box-shadow: 0 4px 16px rgba(0,0,0,0.5);
             }
-            .aff-debug-toolbar {
+            .amf-debug-toolbar {
                 position: sticky;
                 top: 0;
                 display: flex;
@@ -247,7 +247,7 @@ module.exports = class ActiveFriendsFilter {
                 justify-content: flex-end;
                 margin-bottom: 6px;
             }
-            .aff-debug-toolbar > div {
+            .amf-debug-toolbar > div {
                 cursor: pointer;
                 background: #5865f2;
                 color: #fff;
@@ -641,7 +641,7 @@ module.exports = class ActiveFriendsFilter {
             else if (this.active) this.removePanel(); // sidebar went away
         } catch (e) {
             this.lastError = e;
-            console.error("[ActiveFriendsFilter] tick failed:", e);
+            console.error("[ActiveMembersFilter] tick failed:", e);
         }
     }
 
@@ -928,13 +928,13 @@ module.exports = class ActiveFriendsFilter {
     buildPanel() {
         this.removePanel();
         const panel = document.createElement("div");
-        panel.className = "aff-panel";
+        panel.className = "amf-panel";
         document.body.appendChild(panel);
         this.panel = panel;
     }
 
     removePanel() {
-        document.querySelectorAll(".aff-panel").forEach((el) => el.remove());
+        document.querySelectorAll(".amf-panel").forEach((el) => el.remove());
         this.panel = null;
         this.panelSignature = null;
     }
@@ -956,13 +956,13 @@ module.exports = class ActiveFriendsFilter {
         panel.textContent = "";
 
         const head = document.createElement("div");
-        head.className = "aff-panel-head";
+        head.className = "amf-panel-head";
         head.textContent = `ACTIVE — ${data.total}`;
         panel.appendChild(head);
 
         if (!data.total) {
             const empty = document.createElement("div");
-            empty.className = "aff-empty";
+            empty.className = "amf-empty";
             empty.textContent = data.considered
                 ? "Nobody here is playing, streaming, listening or watching right now."
                 : "No members loaded yet. Scroll the member list once, then try again.";
@@ -974,13 +974,13 @@ module.exports = class ActiveFriendsFilter {
             // The header is created alongside its members, so a group with
             // nobody in it can never produce a stray heading.
             const groupHead = document.createElement("div");
-            groupHead.className = "aff-group-head";
+            groupHead.className = "amf-group-head";
             groupHead.textContent = `${group.name} — ${group.members.length}`;
             panel.appendChild(groupHead);
 
             for (const member of group.members) {
                 const row = document.createElement("div");
-                row.className = "aff-member";
+                row.className = "amf-member";
                 row.setAttribute("role", "button");
                 row.setAttribute("tabindex", "0");
                 row.title = `${member.name} — ${member.activity.label}`;
@@ -993,23 +993,23 @@ module.exports = class ActiveFriendsFilter {
                 });
 
                 const img = document.createElement("img");
-                img.className = "aff-avatar";
+                img.className = "amf-avatar";
                 img.src = member.avatar;
                 img.alt = "";
                 row.appendChild(img);
 
                 const text = document.createElement("div");
-                text.className = "aff-member-text";
+                text.className = "amf-member-text";
 
                 // Names and activity strings are user-controlled, so they are
                 // set as text. Never innerHTML here.
                 const name = document.createElement("div");
-                name.className = "aff-name";
+                name.className = "amf-name";
                 name.textContent = member.name;
                 if (member.color) name.style.color = member.color;
 
                 const activity = document.createElement("div");
-                activity.className = "aff-activity";
+                activity.className = "amf-activity";
                 activity.textContent = member.activity.label;
 
                 text.appendChild(name);
@@ -1022,8 +1022,8 @@ module.exports = class ActiveFriendsFilter {
 
     showAll() {
         document
-            .querySelectorAll(".aff-hidden-row")
-            .forEach((el) => el.classList.remove("aff-hidden-row"));
+            .querySelectorAll(".amf-hidden-row")
+            .forEach((el) => el.classList.remove("amf-hidden-row"));
         this.removePanel();
     }
 
@@ -1066,15 +1066,15 @@ module.exports = class ActiveFriendsFilter {
     }
 
     mountButton() {
-        document.querySelectorAll(".aff-toggle-btn").forEach((el) => el.remove());
+        document.querySelectorAll(".amf-toggle-btn").forEach((el) => el.remove());
         const btn = document.createElement("div");
-        btn.className = "aff-toggle-btn";
+        btn.className = "amf-toggle-btn";
         btn.setAttribute("role", "button");
         btn.setAttribute("tabindex", "0");
         btn.appendChild(this.buildIcon());
 
         const label = document.createElement("span");
-        label.className = "aff-label";
+        label.className = "amf-label";
         btn.appendChild(label);
         this.buttonLabel = label;
 
@@ -1085,7 +1085,7 @@ module.exports = class ActiveFriendsFilter {
                 return;
             }
             this.active = !this.active;
-            btn.classList.toggle("aff-active", this.active);
+            btn.classList.toggle("amf-active", this.active);
             if (!this.active) this.showAll();
             this.updateButtonLabel();
             this.applyFilter();
@@ -1099,11 +1099,11 @@ module.exports = class ActiveFriendsFilter {
         // floating pill so the control is never simply absent.
         const toolbar = this.findToolbar();
         if (toolbar) {
-            btn.classList.add("aff-in-toolbar");
+            btn.classList.add("amf-in-toolbar");
             toolbar.insertBefore(btn, toolbar.firstChild);
             this.buttonHome = "toolbar";
         } else {
-            btn.classList.add("aff-floating");
+            btn.classList.add("amf-floating");
             document.body.appendChild(btn);
             this.buttonHome = "floating";
         }
@@ -1120,11 +1120,11 @@ module.exports = class ActiveFriendsFilter {
             if (this.buttonLabel) this.buttonLabel.textContent = "No member list";
             this.button.title =
                 "Active only — member list not detected. Open it with the people icon, or click for debug info.";
-            this.button.classList.add("aff-idle");
-            this.button.classList.remove("aff-active");
+            this.button.classList.add("amf-idle");
+            this.button.classList.remove("amf-active");
             return;
         }
-        this.button.classList.remove("aff-idle");
+        this.button.classList.remove("amf-idle");
         if (this.buttonLabel) {
             this.buttonLabel.textContent = this.active ? "Showing Active Only" : "Show Active Only";
         }
@@ -1378,12 +1378,12 @@ module.exports = class ActiveFriendsFilter {
     }
 
     showDebugPanel(text) {
-        document.querySelector(".aff-debug-panel")?.remove();
+        document.querySelector(".amf-debug-panel")?.remove();
         const panel = document.createElement("div");
-        panel.className = "aff-debug-panel";
+        panel.className = "amf-debug-panel";
 
         const toolbar = document.createElement("div");
-        toolbar.className = "aff-debug-toolbar";
+        toolbar.className = "amf-debug-toolbar";
 
         // No DevTools console here, so make the dump easy to paste elsewhere.
         const copyBtn = document.createElement("div");

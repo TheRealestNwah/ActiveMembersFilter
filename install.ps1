@@ -4,7 +4,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$source = Join-Path $PSScriptRoot "ActiveFriendsFilter.plugin.js"
+$source = Join-Path $PSScriptRoot "ActiveMembersFilter.plugin.js"
 $target = Join-Path $env:APPDATA "BetterDiscord\plugins"
 
 if (-not (Test-Path $source)) { throw "Plugin file not found at $source" }

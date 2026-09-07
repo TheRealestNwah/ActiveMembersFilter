@@ -5,8 +5,9 @@ server member list. Switch it on and the member list is replaced by a list of on
 people currently **doing something** — playing a game, listening to Spotify, streaming, or
 watching along.
 
-> **Status: work in progress.** Not released anywhere; the version stays at `1.0.0` until
-> it is confirmed working. See [Known issues](#known-issues).
+> **Status: working.** Confirmed against a live server: correct members, correct
+> activities, grouped by role with empty groups omitted. Not released anywhere, and the
+> version stays at `1.0.0`. See [Known issues](#known-issues) for the remaining limits.
 
 ## Install
 
@@ -87,6 +88,11 @@ exactly 2px.
 **`innerText` is layout-aware.** It returns `""` for a subtree the browser has skipped
 rendering, so scraping `innerText` saw text on exactly one row — the same painted row.
 Both symptoms had one cause. Use `textContent` when reading unpainted DOM.
+
+**Scraped text produces false positives.** One member in the test server is called
+`Playing Catchup`. Matching `/Playing /` against a row's text lists them as in-game.
+`PresenceStore` has no such problem, and it also reports activities that Discord's own
+member list does not render at all.
 
 **Scraped text is a bad signal anyway.** Matching on `"Playing "` / `"Listening to"` breaks
 on any non-English client, and the member list often doesn't render an activity line at

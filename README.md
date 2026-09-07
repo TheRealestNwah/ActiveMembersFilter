@@ -1,13 +1,12 @@
 # ActiveMembersFilter
 
-A [BetterDiscord](https://betterdiscord.app/) plugin that adds a toggle button above the
-server member list. Switch it on and the member list is replaced by a list of only the
-people currently **doing something** — playing a game, listening to Spotify, streaming, or
-watching along.
+A [BetterDiscord](https://betterdiscord.app/) plugin that adds a toggle to the channel
+header. Switch it on and the server member list is replaced by just the people currently
+**doing something** — playing a game, listening to Spotify, streaming, or watching along —
+still grouped by role, with the groups nobody is active in left out.
 
-> **Status: working.** Confirmed against a live server: correct members, correct
-> activities, grouped by role with empty groups omitted. Not released anywhere, and the
-> version stays at `1.0.0`. See [Known issues](#known-issues) for the remaining limits.
+Built because the member list in a busy server is mostly people who aren't around, and
+scrolling it to find who is actually playing something is tedious.
 
 ## Install
 
@@ -59,19 +58,35 @@ Everything comes from Discord's own Flux stores through `BdApi.Webpack`:
 | --- | --- |
 | `SelectedGuildStore` | Which server is open |
 | `GuildMemberStore` | Member ids, nicknames, role ids, name colour |
-| `GuildStore` | Role names, hoist flag, position |
-| `PresenceStore` | Each member's current activities |
-| `UserStore` | Usernames and avatar URLs |
+| `GuildRoleStore` / `GuildStore` | Role names, hoist flag, position |
+| `PresenceStore` | Each member's activities and status |
+| `UserStore` | Usernames, avatars, and the bot/system flags |
+| `RelationshipStore` | Friend status, for the friends-only setting |
 
-Activity types 0/1/2/3/5 (playing, streaming, listening, watching, competing) count as
-active; type 4 (custom status) does not. Bots and system accounts — the ones Discord marks
-with an `APP` tag — are excluded. A user who cannot be looked up at all is treated as human,
-so a failed lookup never silently drops a real person. Members are grouped by their highest **hoisted**
-role, ordered by role position, exactly as Discord groups them — and a group header is only
-created alongside its members, so an empty group can never render a stray heading.
+By default, activity types 0/1/2/3/5 (playing, streaming, listening, watching, competing)
+count as active and type 4 (custom status) does not, and bots and system accounts — the ones
+Discord marks with an `APP` tag — are excluded. All of that is configurable in the settings
+panel. A user who cannot be looked up at all is treated as human and kept, so a failed
+lookup never silently drops a real person; the friends-only filter follows the same rule.
+
+Members are grouped by their highest **hoisted** role, ordered by role position, exactly as
+Discord groups them — and a group header is only created alongside its members, so an empty
+group can never render a stray heading.
+
+Status indicators reproduce Discord's shapes rather than plain dots: a crescent for idle, a
+bar for do-not-disturb, a play triangle for streaming, a ring for offline. Streaming is
+taken from the activity type, because Discord reports someone streaming as plain `online`.
 
 User ids scraped from rendered avatars are folded in as a safety net, so the result can
 never be worse than the DOM-only approach it replaced.
+
+### Finding roles
+
+Discord has moved guild roles between stores across builds, so the lookup tries
+`GuildRoleStore.getRoles` → `GuildStore.getRoles` → `guild.roles`, then falls back to a
+per-role getter for builds that expose no enumerable map at all. Reading only one of these
+fails silently — no error, just every member collapsing into the ungrouped bucket — so the
+debug panel reports which source answered.
 
 ### When it updates
 
@@ -98,20 +113,17 @@ Kept because these cost real time to work out.
 `getBoundingClientRect()` reported `h=2` for every row except the one that happened to be
 painted. Discord uses `content-visibility: auto` on the member list; a skipped element
 reports only its **padding box**, and the row carries 1px of padding top and bottom — hence
-exactly 2px.
+exactly 2px. The fix was not to force the property off but to stop measuring rows at all
+and match on structure instead.
 
 **`innerText` is layout-aware.** It returns `""` for a subtree the browser has skipped
 rendering, so scraping `innerText` saw text on exactly one row — the same painted row.
 Both symptoms had one cause. Use `textContent` when reading unpainted DOM.
 
-**Scraped text produces false positives.** One member in the test server is called
-`Playing Catchup`. Matching `/Playing /` against a row's text lists them as in-game.
-`PresenceStore` has no such problem, and it also reports activities that Discord's own
-member list does not render at all.
-
-**Scraped text is a bad signal anyway.** Matching on `"Playing "` / `"Listening to"` breaks
-on any non-English client, and the member list often doesn't render an activity line at
-all. `PresenceStore` is authoritative and language-independent.
+**Scraped text is the wrong signal entirely.** Matching `"Playing "` against a row's text
+breaks on any non-English client, misses members whose activity line Discord never renders,
+and produces false positives — one member in the test server is literally called
+`Playing Catchup`. `PresenceStore` has none of these problems and is language-independent.
 
 **Don't gate your debug UI behind the thing you're debugging.** An early version only
 created the button *after* the member list was found, so when detection failed there was no
@@ -137,6 +149,8 @@ different jobs; the full sweep now happens only when the debug panel asks for it
   server the panel shows the active people among those, not all of them. Nothing
   client-side can enumerate a 10,000-member guild that was never fetched.
 - **Only the server member list.** The Friends tab and DM list are not touched.
+- **No right-click menu on panel members.** Clicking opens the profile; Discord's own
+  context menu (mention, message, roles) is not reproduced.
 
 ## License
 

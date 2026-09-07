@@ -3,7 +3,7 @@
  * @author TheRealestNwah
  * @source https://github.com/TheRealestNwah/ActiveMembersFilter
  * @website https://github.com/TheRealestNwah/ActiveMembersFilter
- * @description Adds a toggle button above the server member list that filters it down to members currently playing a game, listening to Spotify, streaming or watching something.
+ * @description Adds a toggle to the channel header that replaces the member list with just the people currently playing a game, listening to Spotify, streaming or watching something.
  * @version 1.0.0
  */
 
@@ -16,6 +16,7 @@ module.exports = class ActiveMembersFilter {
         this.button = null;
         this.sidebar = null;
         this.styleId = "amf-style";
+        this.maskDefsId = "amf-status-masks";
         this.DEBUG = true; // set to false to silence console logs
 
         // Populated by the resolvers so the debug panel can report what worked.
@@ -160,6 +161,7 @@ module.exports = class ActiveMembersFilter {
     start() {
         this.loadSettings();
         this.injectStyles();
+        this.injectStatusMasks();
         // Mount immediately and unconditionally. The button must exist even when
         // nothing is detected, otherwise the only way to diagnose a detection
         // failure is gated behind that same detection succeeding.
@@ -312,19 +314,21 @@ module.exports = class ActiveMembersFilter {
             }
             .amf-status {
                 position: absolute;
-                right: -2px;
-                bottom: -2px;
+                right: -3px;
+                bottom: -3px;
+                display: block;
                 width: 10px;
                 height: 10px;
+                padding: 3px;
                 border-radius: 50%;
-                border: 3px solid var(--background-secondary, #2b2d31);
                 box-sizing: content-box;
-                background: #80848e;
+                background: var(--background-secondary, #2b2d31);
             }
-            .amf-status-online { background: #23a55a; }
-            .amf-status-idle { background: #f0b232; }
-            .amf-status-dnd { background: #f23f43; }
-            .amf-status-streaming { background: #593695; }
+            .amf-status svg {
+                display: block;
+                width: 10px;
+                height: 10px;
+            }
             .amf-settings {
                 padding: 4px 0;
                 color: var(--text-normal, #dbdee1);
@@ -410,6 +414,91 @@ module.exports = class ActiveMembersFilter {
 
     removeStyles() {
         document.getElementById(this.styleId)?.remove();
+        document.getElementById(this.maskDefsId)?.remove();
+    }
+
+    // Discord's status indicators are shaped, not plain dots: idle is a
+    // crescent, do-not-disturb has a bar cut through it, streaming is a play
+    // triangle and offline is a hollow ring. These masks reproduce that
+    // geometry; they live in one hidden <svg> and are referenced by id.
+    injectStatusMasks() {
+        if (document.getElementById(this.maskDefsId)) return;
+        const NS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(NS, "svg");
+        svg.id = this.maskDefsId;
+        svg.setAttribute("width", "0");
+        svg.setAttribute("height", "0");
+        svg.style.position = "absolute";
+        const defs = document.createElementNS(NS, "defs");
+
+        const shapes = {
+            // Cut a circle out of the top-left to leave a crescent moon.
+            idle: ["circle", { cx: 2.5, cy: 2.5, r: 3.75 }],
+            // Cut a rounded bar through the middle.
+            dnd: ["rect", { x: 1.25, y: 3.75, width: 7.5, height: 2.5, rx: 1.25 }],
+            // Cut a play triangle out of the centre.
+            streaming: ["polygon", { points: "3.6,2.9 3.6,7.1 7.6,5" }],
+            // Cut a concentric circle to leave a ring.
+            offline: ["circle", { cx: 5, cy: 5, r: 2.5 }],
+        };
+
+        for (const [name, [tag, attrs]] of Object.entries(shapes)) {
+            const mask = document.createElementNS(NS, "mask");
+            mask.setAttribute("id", `amf-mask-${name}`);
+            mask.setAttribute("maskUnits", "userSpaceOnUse");
+            mask.setAttribute("x", "0");
+            mask.setAttribute("y", "0");
+            mask.setAttribute("width", "10");
+            mask.setAttribute("height", "10");
+
+            const base = document.createElementNS(NS, "circle");
+            base.setAttribute("cx", "5");
+            base.setAttribute("cy", "5");
+            base.setAttribute("r", "5");
+            base.setAttribute("fill", "white");
+            mask.appendChild(base);
+
+            const cut = document.createElementNS(NS, tag);
+            for (const [k, v] of Object.entries(attrs)) cut.setAttribute(k, String(v));
+            cut.setAttribute("fill", "black");
+            mask.appendChild(cut);
+
+            defs.appendChild(mask);
+        }
+
+        svg.appendChild(defs);
+        document.body.appendChild(svg);
+    }
+
+    statusColors() {
+        return {
+            online: "#23a55a",
+            idle: "#f0b232",
+            dnd: "#f23f43",
+            streaming: "#593695",
+            offline: "#80848e",
+        };
+    }
+
+    buildStatusDot(status) {
+        const NS = "http://www.w3.org/2000/svg";
+        const colors = this.statusColors();
+        const key = colors[status] ? status : "offline";
+
+        const svg = document.createElementNS(NS, "svg");
+        svg.setAttribute("viewBox", "0 0 10 10");
+        svg.setAttribute("aria-hidden", "true");
+
+        const circle = document.createElementNS(NS, "circle");
+        circle.setAttribute("cx", "5");
+        circle.setAttribute("cy", "5");
+        circle.setAttribute("r", "5");
+        circle.setAttribute("fill", colors[key]);
+        // "online" is the only unmasked shape: a plain filled circle.
+        if (key !== "online") circle.setAttribute("mask", `url(#amf-mask-${key})`);
+
+        svg.appendChild(circle);
+        return svg;
     }
 
     // ----------------------------------------------------------- flux stores
@@ -640,13 +729,19 @@ module.exports = class ActiveMembersFilter {
         return best ? { name: best.name, position: best.position } : fallback;
     }
 
-    // online / idle / dnd / streaming / offline, for the dot on the avatar.
-    statusForUser(userId) {
+    // Discord reports someone streaming as plain "online", so the streaming
+    // indicator has to come from the activity (type 1) rather than the status.
+    // "invisible" is offline as far as anyone else can see.
+    statusForUser(userId, activity) {
+        if (activity && activity.type === 1) return "streaming";
+        let status;
         try {
-            return this.stores.presence?.getStatus?.(userId) || "offline";
+            status = this.stores.presence?.getStatus?.(userId);
         } catch (e) {
-            return "offline";
+            status = null;
         }
+        if (!status || status === "invisible") return "offline";
+        return status;
     }
 
     safeUser(userId) {
@@ -735,7 +830,7 @@ module.exports = class ActiveMembersFilter {
                 name,
                 color,
                 activity,
-                status: this.statusForUser(id),
+                status: this.statusForUser(id, activity),
                 avatar: this.avatarUrlFor(guildId, id, user),
             };
 
@@ -890,11 +985,6 @@ module.exports = class ActiveMembersFilter {
         return out;
     }
 
-    // Back-compat shim.
-    findMemberSidebar() {
-        return this.resolveSidebar();
-    }
-
     // ------------------------------------------------------- row resolution
 
     // A real user avatar URL is /avatars/<snowflake>/<hash>. Default avatars
@@ -991,11 +1081,6 @@ module.exports = class ActiveMembersFilter {
 
         this.lastRows = rows;
         return rows;
-    }
-
-    // Back-compat shim: earlier versions of this plugin exposed bare elements.
-    getMemberRows() {
-        return this.resolveRows().map((r) => r.el);
     }
 
     // ------------------------------------------------------------ filtering
@@ -1165,7 +1250,9 @@ module.exports = class ActiveMembersFilter {
                 img.alt = "";
                 avatarWrap.appendChild(img);
                 const dot = document.createElement("span");
-                dot.className = `amf-status amf-status-${member.status}`;
+                dot.className = "amf-status";
+                dot.title = member.status;
+                dot.appendChild(this.buildStatusDot(member.status));
                 avatarWrap.appendChild(dot);
                 row.appendChild(avatarWrap);
 

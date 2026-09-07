@@ -79,6 +79,12 @@ Spotify `name` is only the platform — a stream carries the game in `state` and
 stream reads `Streaming HELLDIVERS 2` rather than `Streaming Twitch`, falling back to the
 platform when nothing better is set.
 
+When someone plays with a linked console account, Discord tags the activity with a
+`platform` (`ps4`, `ps5`, `xbox`), and the panel shows a small icon for it. PC and mobile
+show none, since an icon on nearly every row is noise. Discord's own platform icons are
+React components inside its bundle rather than fetchable assets, so these are drawn in the
+plugin and will not match Discord's exactly.
+
 Status indicators reproduce Discord's shapes rather than plain dots: a crescent for idle, a
 bar for do-not-disturb, a play triangle for streaming, a ring for offline. Streaming is
 taken from the activity type, because Discord reports someone streaming as plain `online`.

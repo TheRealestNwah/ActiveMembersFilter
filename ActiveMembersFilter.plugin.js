@@ -361,12 +361,27 @@ module.exports = class ActiveMembersFilter {
                 text-overflow: ellipsis;
             }
             .amf-activity {
+                display: flex;
+                align-items: center;
+                gap: 5px;
+                min-width: 0;
                 font-size: 12px;
                 color: var(--text-muted, #949ba4);
+            }
+            /* The text, not the row, carries the ellipsis, so the platform
+               icon is never the thing that gets clipped away. */
+            .amf-activity span {
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
             }
+            .amf-platform {
+                flex: 0 0 auto;
+                width: 14px;
+                height: 14px;
+            }
+            .amf-platform-playstation { color: #2e6fdb; }
+            .amf-platform-xbox { color: #4caf50; }
             .amf-empty {
                 padding: 28px 16px;
                 font-size: 13px;
@@ -479,6 +494,57 @@ module.exports = class ActiveMembersFilter {
             streaming: "#593695",
             offline: "#80848e",
         };
+    }
+
+    // Drawn here rather than lifted from Discord, whose platform icons are
+    // React components inside its bundle and not reachable as assets.
+    buildPlatformIcon(platform) {
+        const NS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(NS, "svg");
+        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("aria-hidden", "true");
+        svg.setAttribute("class", `amf-platform amf-platform-${platform}`);
+
+        const add = (tag, attrs) => {
+            const el = document.createElementNS(NS, tag);
+            for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
+            svg.appendChild(el);
+        };
+
+        if (platform === "xbox") {
+            // A sphere with a curved X through it.
+            add("circle", {
+                cx: 12,
+                cy: 12,
+                r: 10,
+                fill: "none",
+                stroke: "currentColor",
+                "stroke-width": 2,
+            });
+            const stroke = {
+                fill: "none",
+                stroke: "currentColor",
+                "stroke-width": 2.4,
+                "stroke-linecap": "round",
+            };
+            add("path", Object.assign({ d: "M6.6 5.4C9.2 8.2 14.8 15.8 17.4 18.6" }, stroke));
+            add("path", Object.assign({ d: "M17.4 5.4C14.8 8.2 9.2 15.8 6.6 18.6" }, stroke));
+        } else if (platform === "playstation") {
+            // The four face buttons, which read as PlayStation even at 14px.
+            const line = {
+                fill: "none",
+                stroke: "currentColor",
+                "stroke-width": 2,
+                "stroke-linecap": "round",
+                "stroke-linejoin": "round",
+            };
+            add("path", Object.assign({ d: "M12 2.6 8.9 8.2h6.2Z" }, line)); // triangle
+            add("circle", Object.assign({ cx: 18.6, cy: 12, r: 3.1 }, line)); // circle
+            add("path", Object.assign({ d: "M9.8 13.8 14.2 18.2M14.2 13.8 9.8 18.2" }, line)); // cross
+            add("rect", Object.assign({ x: 2.3, y: 8.9, width: 6.2, height: 6.2, rx: 1 }, line)); // square
+        }
+
+        return svg;
     }
 
     buildStatusDot(status) {
@@ -622,8 +688,29 @@ module.exports = class ActiveMembersFilter {
             verb,
             name: a.name || "",
             subject: this.activitySubject(a),
+            platform: this.platformFor(a),
             label: `${verb} ${this.activitySubject(a)}`.trim(),
         };
+    }
+
+    // Console activities carry the platform when the account is linked, which
+    // is what drives the icon in Discord's own profile view. Desktop and
+    // unknown platforms deliberately return null: a PC icon on almost every
+    // row would be noise.
+    platformFor(a) {
+        const platform = String(a.platform || "").toLowerCase();
+        if (platform === "xbox") return "xbox";
+        if (platform === "ps4" || platform === "ps5" || platform === "playstation") {
+            return "playstation";
+        }
+        // Some builds surface it only through the asset key.
+        const assets = a.assets || {};
+        const image = String(assets.large_image || assets.small_image || "").toLowerCase();
+        if (image.includes("xbox")) return "xbox";
+        if (image.includes("playstation") || /(^|[^a-z])ps[45]([^a-z]|$)/.test(image)) {
+            return "playstation";
+        }
+        return null;
     }
 
     // What the member is actually doing, as opposed to the app they are doing
@@ -1136,7 +1223,9 @@ module.exports = class ActiveMembersFilter {
             data.guildId,
             data.groups.map((g) => [
                 g.name,
-                g.members.map((m) => `${m.id}:${m.status}:${m.activity.label}`),
+                g.members.map(
+                    (m) => `${m.id}:${m.status}:${m.activity.platform || ""}:${m.activity.label}`
+                ),
             ]),
         ]);
 
@@ -1294,7 +1383,12 @@ module.exports = class ActiveMembersFilter {
 
                 const activity = document.createElement("div");
                 activity.className = "amf-activity";
-                activity.textContent = member.activity.label;
+                if (member.activity.platform) {
+                    activity.appendChild(this.buildPlatformIcon(member.activity.platform));
+                }
+                const activityText = document.createElement("span");
+                activityText.textContent = member.activity.label;
+                activity.appendChild(activityText);
 
                 text.appendChild(name);
                 text.appendChild(activity);
@@ -1569,7 +1663,12 @@ module.exports = class ActiveMembersFilter {
         }
         collection.groups.forEach((g) => {
             push(`  ${g.name} — ${g.members.length}`);
-            g.members.forEach((m) => push(`      ${m.name}: ${m.activity.label}`));
+            g.members.forEach((m) =>
+                push(
+                    `      ${m.name}: ${m.activity.label}` +
+                        `  [status=${m.status} platform=${m.activity.platform || "none"}]`
+                )
+            );
         });
         if (!collection.storeIds) {
             push("→ Stores returned no members, so the panel is falling back to the");

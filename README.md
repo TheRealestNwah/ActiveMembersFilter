@@ -31,6 +31,13 @@ an on-screen debug panel reporting which detection strategy won, which Discord s
 resolved, and what the plugin believes about every member. It has a **📋 Copy** button, so
 the dump can go into an issue without needing DevTools.
 
+Each member shows a status dot (online, idle, do-not-disturb, streaming) on their avatar,
+as the native list does.
+
+**Settings → Plugins → ActiveMembersFilter** has a settings panel: which activity types
+count as active, whether to exclude bots and apps, and whether to show friends only.
+Changes apply immediately.
+
 ## How it works
 
 ### Why it renders its own list
@@ -65,6 +72,15 @@ created alongside its members, so an empty group can never render a stray headin
 
 User ids scraped from rendered avatars are folded in as a safety net, so the result can
 never be worse than the DOM-only approach it replaced.
+
+### When it updates
+
+The list is rebuilt in response to `PresenceStore` change events, not on a timer. A one
+second tick remains, but only to keep the button mounted and the panel positioned; it
+reuses the cached sidebar and does no detection work. Detection strategies stop at the
+first one that succeeds, so the expensive geometry sweep runs only if every structural
+selector fails — or when the debug panel is opened and deliberately asks for the full
+scoreboard. A 15 second staleness check acts as a backstop for a missed event.
 
 ### Finding the member list
 
@@ -107,6 +123,12 @@ check measured that container's own rect. Since Discord keeps it mounted permane
 full-viewport overlay, any child at all — a tooltip, a hover card — made it look like a
 fullscreen modal, and the button was hidden a tick after being created. Measure the
 *children*, not the container.
+
+**Diagnostics are not free.** The strategy scoreboards were built by running every
+strategy on every pass, which meant a `querySelectorAll("div")` sweep plus a
+`getBoundingClientRect()` on every div in the document, once a second, forever — a forced
+layout for information nothing was reading. Gathering diagnostics and doing the work are
+different jobs; the full sweep now happens only when the debug panel asks for it.
 
 ## Known issues
 

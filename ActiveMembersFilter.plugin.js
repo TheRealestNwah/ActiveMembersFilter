@@ -9,11 +9,13 @@
 
 module.exports = class ActiveMembersFilter {
     constructor() {
+        this.NAME = "ActiveMembersFilter";
+        this.settings = this.defaultSettings();
+
         this.active = false;
         this.button = null;
         this.sidebar = null;
         this.styleId = "amf-style";
-        this.cvStyleId = "amf-cv-style";
         this.DEBUG = true; // set to false to silence console logs
 
         // Populated by the resolvers so the debug panel can report what worked.
@@ -22,7 +24,6 @@ module.exports = class ActiveMembersFilter {
         this.rowStrategy = null;
         this.strategyStats = {};
         this.lastRows = [];
-        this.cvOverrideActive = false;
         this.lastError = null;
 
         this.stores = {
@@ -39,9 +40,117 @@ module.exports = class ActiveMembersFilter {
         this.panelSignature = null;
         this.lastCollection = null;
 
+        this.collectionDirty = true;
+        this.lastCollectedAt = 0;
+        this._onPresenceChange = null;
+
         this.buttonHome = null; // "toolbar" | "floating"
         this.buttonLabel = null;
         this._profileOpener = undefined; // undefined = not looked up yet
+    }
+
+    defaultSettings() {
+        return {
+            // Keyed by Discord ActivityType. 4 (custom status) is deliberately
+            // absent: it is a mood line, not something the user is doing.
+            types: { 0: true, 1: true, 2: true, 3: true, 5: true },
+            excludeBots: true,
+            friendsOnly: false,
+        };
+    }
+
+    loadSettings() {
+        const defaults = this.defaultSettings();
+        let saved = null;
+        try {
+            const D = window.BdApi?.Data;
+            saved =
+                (D?.load ? D.load(this.NAME, "settings") : null) ||
+                window.BdApi?.loadData?.(this.NAME, "settings") ||
+                null;
+        } catch (e) {
+            /* fall back to defaults */
+        }
+        this.settings = Object.assign(defaults, saved || {});
+        this.settings.types = Object.assign(defaults.types, (saved && saved.types) || {});
+    }
+
+    saveSettings() {
+        try {
+            const D = window.BdApi?.Data;
+            if (D?.save) D.save(this.NAME, "settings", this.settings);
+            else window.BdApi?.saveData?.(this.NAME, "settings", this.settings);
+        } catch (e) {
+            this.log("could not persist settings", e);
+        }
+        // Force a rebuild so a changed filter takes effect immediately.
+        this.collectionDirty = true;
+        this.panelSignature = null;
+    }
+
+    getSettingsPanel() {
+        const wrap = document.createElement("div");
+        wrap.className = "amf-settings";
+
+        const section = (title) => {
+            const h = document.createElement("div");
+            h.className = "amf-settings-head";
+            h.textContent = title;
+            wrap.appendChild(h);
+        };
+
+        const toggle = (label, get, set) => {
+            const row = document.createElement("label");
+            row.className = "amf-settings-row";
+            const box = document.createElement("input");
+            box.type = "checkbox";
+            box.checked = !!get();
+            box.addEventListener("change", () => {
+                set(box.checked);
+                this.saveSettings();
+            });
+            const text = document.createElement("span");
+            text.textContent = label;
+            row.appendChild(box);
+            row.appendChild(text);
+            wrap.appendChild(row);
+        };
+
+        section("Count as active");
+        const typeLabels = {
+            0: "Playing a game",
+            1: "Streaming",
+            2: "Listening (Spotify)",
+            3: "Watching",
+            5: "Competing",
+        };
+        for (const [type, label] of Object.entries(typeLabels)) {
+            toggle(
+                label,
+                () => this.settings.types[type],
+                (v) => {
+                    this.settings.types[type] = v;
+                }
+            );
+        }
+
+        section("Who to show");
+        toggle(
+            "Exclude bots and apps",
+            () => this.settings.excludeBots,
+            (v) => {
+                this.settings.excludeBots = v;
+            }
+        );
+        toggle(
+            "Friends only",
+            () => this.settings.friendsOnly,
+            (v) => {
+                this.settings.friendsOnly = v;
+            }
+        );
+
+        return wrap;
     }
 
     log(...args) {
@@ -49,11 +158,13 @@ module.exports = class ActiveMembersFilter {
     }
 
     start() {
+        this.loadSettings();
         this.injectStyles();
         // Mount immediately and unconditionally. The button must exist even when
         // nothing is detected, otherwise the only way to diagnose a detection
         // failure is gated behind that same detection succeeding.
         this.mountButton();
+        this.subscribeToPresence();
         this.tick();
         this._mainLoop = setInterval(() => this.tick(), 1000);
         this.log("started");
@@ -61,8 +172,9 @@ module.exports = class ActiveMembersFilter {
 
     stop() {
         clearInterval(this._mainLoop);
+        this.unsubscribeFromPresence();
         this.active = false;
-        this.showAll();
+        this.removePanel();
         this.removeStyles();
         document.querySelector(".amf-debug-panel")?.remove();
         if (this.button) this.button.remove();
@@ -147,9 +259,6 @@ module.exports = class ActiveMembersFilter {
                 width: 16px;
                 height: 16px;
             }
-            .amf-hidden-row {
-                display: none !important;
-            }
             /* Our own member list, painted over Discord's. An overlay rather
                than DOM surgery inside React's tree, so there is nothing for
                React to reconcile away on its next render. */
@@ -189,11 +298,51 @@ module.exports = class ActiveMembersFilter {
             .amf-member:active {
                 background: var(--background-modifier-selected, #3f4147);
             }
+            .amf-avatar-wrap {
+                position: relative;
+                flex: 0 0 auto;
+                width: 32px;
+                height: 32px;
+            }
             .amf-avatar {
                 width: 32px;
                 height: 32px;
                 border-radius: 50%;
-                flex: 0 0 auto;
+                display: block;
+            }
+            .amf-status {
+                position: absolute;
+                right: -2px;
+                bottom: -2px;
+                width: 10px;
+                height: 10px;
+                border-radius: 50%;
+                border: 3px solid var(--background-secondary, #2b2d31);
+                box-sizing: content-box;
+                background: #80848e;
+            }
+            .amf-status-online { background: #23a55a; }
+            .amf-status-idle { background: #f0b232; }
+            .amf-status-dnd { background: #f23f43; }
+            .amf-status-streaming { background: #593695; }
+            .amf-settings {
+                padding: 4px 0;
+                color: var(--text-normal, #dbdee1);
+                font-size: 14px;
+            }
+            .amf-settings-head {
+                margin: 16px 0 8px;
+                font-size: 12px;
+                font-weight: 700;
+                text-transform: uppercase;
+                color: var(--text-muted, #949ba4);
+            }
+            .amf-settings-row {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 6px 0;
+                cursor: pointer;
             }
             .amf-member-text {
                 min-width: 0;
@@ -261,30 +410,6 @@ module.exports = class ActiveMembersFilter {
 
     removeStyles() {
         document.getElementById(this.styleId)?.remove();
-        document.getElementById(this.cvStyleId)?.remove();
-        this.cvOverrideActive = false;
-    }
-
-    // `content-visibility: auto` lets the browser skip layout for off-screen
-    // rows. While skipped, an element reports only its padding box to
-    // getBoundingClientRect() (a padded row measures ~2px) and innerText
-    // returns "" because innerText is layout-aware. Detection below no longer
-    // depends on either, but forcing the property off keeps the geometry
-    // fallback honest. Only injected if a row is actually found to use it,
-    // since disabling it costs render performance in large servers.
-    enableContentVisibilityOverride() {
-        if (this.cvOverrideActive) return;
-        const style = document.createElement("style");
-        style.id = this.cvStyleId;
-        style.textContent = `
-            [class*="member__"], [class*="memberInner"], [role="listitem"] {
-                content-visibility: visible !important;
-                contain-intrinsic-size: none !important;
-            }
-        `;
-        document.head.appendChild(style);
-        this.cvOverrideActive = true;
-        this.log("content-visibility override injected (skipped rows detected)");
     }
 
     // ----------------------------------------------------------- flux stores
@@ -330,6 +455,36 @@ module.exports = class ActiveMembersFilter {
         return this.stores;
     }
 
+    // The list only needs rebuilding when someone's presence actually changes.
+    // Without this the plugin re-derived the whole list on a timer regardless.
+    subscribeToPresence() {
+        const { presence } = this.getStores();
+        if (!presence?.addChangeListener || this._onPresenceChange) return false;
+        this._onPresenceChange = () => {
+            this.collectionDirty = true;
+        };
+        try {
+            presence.addChangeListener(this._onPresenceChange);
+            this.log("subscribed to PresenceStore changes");
+            return true;
+        } catch (e) {
+            this._onPresenceChange = null;
+            return false;
+        }
+    }
+
+    unsubscribeFromPresence() {
+        const presence = this.stores.presence;
+        if (presence?.removeChangeListener && this._onPresenceChange) {
+            try {
+                presence.removeChangeListener(this._onPresenceChange);
+            } catch (e) {
+                /* store already gone */
+            }
+        }
+        this._onPresenceChange = null;
+    }
+
     storeReport() {
         return {
             PresenceStore: !!this.stores.presence,
@@ -342,31 +497,6 @@ module.exports = class ActiveMembersFilter {
         };
     }
 
-    // Discord ActivityType: 0 playing, 1 streaming, 2 listening, 3 watching,
-    // 4 custom status, 5 competing. Custom status is just a mood line, not
-    // something the user is doing, so it does not count as active.
-    activityForUser(userId) {
-        const { presence } = this.getStores();
-        if (!presence || !userId || typeof presence.getActivities !== "function") return null;
-
-        let acts;
-        try {
-            acts = presence.getActivities(userId) || [];
-        } catch (e) {
-            return null;
-        }
-
-        const real = acts.filter((a) => a && a.type !== 4);
-        if (!real.length) return { active: false, label: "" };
-
-        const a = real[0];
-        const verb =
-            { 0: "Playing", 1: "Streaming", 2: "Listening to", 3: "Watching", 5: "Competing in" }[
-                a.type
-            ] || "Active:";
-        return { active: true, label: `${verb} ${a.name || "?"}`.trim() };
-    }
-
     isFriend(userId) {
         const { relationship } = this.getStores();
         if (!relationship || !userId || typeof relationship.isFriend !== "function") return null;
@@ -377,7 +507,9 @@ module.exports = class ActiveMembersFilter {
         }
     }
 
-    // Richer than activityForUser(): keeps the fields needed to render a row.
+    // Discord ActivityType: 0 playing, 1 streaming, 2 listening, 3 watching,
+    // 4 custom status, 5 competing. Custom status is a mood line, not something
+    // the user is doing, so it is never counted.
     activityInfoForUser(userId) {
         const { presence } = this.getStores();
         if (!presence || !userId || typeof presence.getActivities !== "function") return null;
@@ -387,7 +519,7 @@ module.exports = class ActiveMembersFilter {
         } catch (e) {
             return null;
         }
-        const real = acts.filter((a) => a && a.type !== 4);
+        const real = acts.filter((a) => a && this.settings.types[a.type]);
         if (!real.length) return null;
 
         const a = real[0];
@@ -508,6 +640,15 @@ module.exports = class ActiveMembersFilter {
         return best ? { name: best.name, position: best.position } : fallback;
     }
 
+    // online / idle / dnd / streaming / offline, for the dot on the avatar.
+    statusForUser(userId) {
+        try {
+            return this.stores.presence?.getStatus?.(userId) || "offline";
+        } catch (e) {
+            return "offline";
+        }
+    }
+
     safeUser(userId) {
         try {
             return this.stores.user?.getUser?.(userId) || null;
@@ -568,14 +709,19 @@ module.exports = class ActiveMembersFilter {
         let withRecord = 0;
         let withRoleIds = 0;
         let botsExcluded = 0;
+        let nonFriendsExcluded = 0;
 
         for (const id of ids) {
             const activity = this.activityInfoForUser(id);
             if (!activity) continue;
 
             const user = this.safeUser(id);
-            if (this.isApp(user)) {
+            if (this.settings.excludeBots && this.isApp(user)) {
                 botsExcluded++;
+                continue;
+            }
+            if (this.settings.friendsOnly && this.isFriend(id) === false) {
+                nonFriendsExcluded++;
                 continue;
             }
 
@@ -584,7 +730,14 @@ module.exports = class ActiveMembersFilter {
             if (member?.roles?.length) withRoleIds++;
             const group = this.groupFromMember(member, lookupRole);
             const { name, color } = this.displayNameFor(id, member, user);
-            const entry = { id, name, color, activity, avatar: this.avatarUrlFor(guildId, id, user) };
+            const entry = {
+                id,
+                name,
+                color,
+                activity,
+                status: this.statusForUser(id),
+                avatar: this.avatarUrlFor(guildId, id, user),
+            };
 
             if (!byGroup.has(group.name)) {
                 byGroup.set(group.name, { name: group.name, position: group.position, members: [] });
@@ -611,6 +764,7 @@ module.exports = class ActiveMembersFilter {
             activeWithMemberRecord: withRecord,
             activeWithRoleIds: withRoleIds,
             botsExcluded,
+            nonFriendsExcluded,
         };
         return this.lastCollection;
     }
@@ -685,10 +839,23 @@ module.exports = class ActiveMembersFilter {
         ];
     }
 
-    resolveSidebar() {
+    // `full` runs every strategy to populate the debug scoreboard. Normal
+    // ticks reuse the cached sidebar and stop at the first strategy that
+    // works, so the expensive geometry sweep never runs in the steady state.
+    resolveSidebar(full = false) {
+        if (
+            !full &&
+            this.sidebar &&
+            document.body.contains(this.sidebar) &&
+            this.isPlausibleSidebar(this.sidebar)
+        ) {
+            return this.sidebar;
+        }
+
         const stats = {};
         let winner = null;
         for (const [name, fn] of this.sidebarStrategies) {
+            if (winner && !full) break;
             let candidates = [];
             try {
                 candidates = fn() || [];
@@ -778,7 +945,7 @@ module.exports = class ActiveMembersFilter {
     // resolves at least half of them. Any candidate that wraps more than one
     // avatar is rejected outright — that is how the whole-list scroll
     // container gets filtered out without needing to know its height.
-    resolveRows() {
+    resolveRows(full = false) {
         if (!this.sidebar) {
             this.strategyStats = { total: 0 };
             this.rowStrategy = null;
@@ -791,6 +958,7 @@ module.exports = class ActiveMembersFilter {
         let winner = null;
 
         for (const [name, fn] of this.rowStrategies) {
+            if (winner && !full) break;
             const found = new Map(); // row element -> avatar
             for (const avatar of avatars) {
                 let el = null;
@@ -821,18 +989,8 @@ module.exports = class ActiveMembersFilter {
               }))
             : [];
 
-        this.maybeFixContentVisibility(rows);
         this.lastRows = rows;
         return rows;
-    }
-
-    maybeFixContentVisibility(rows) {
-        if (this.cvOverrideActive || !rows.length) return;
-        const skipped = rows.some((r) => {
-            const cv = getComputedStyle(r.el).contentVisibility;
-            return cv === "auto" || cv === "hidden";
-        });
-        if (skipped) this.enableContentVisibilityOverride();
     }
 
     // Back-compat shim: earlier versions of this plugin exposed bare elements.
@@ -842,29 +1000,36 @@ module.exports = class ActiveMembersFilter {
 
     // ------------------------------------------------------------ filtering
 
-    // Prefers PresenceStore. Falls back to reading the row's text, using
-    // textContent rather than innerText: innerText is layout-aware and
-    // returns "" for rows the browser has skipped rendering.
-    rowIsActive(row) {
-        const fromStore = this.activityForUser(row.userId);
-        if (fromStore) return fromStore.active;
-        const text = row.el.textContent || "";
-        return /Playing |Listening to|Streaming|Watching |Competing in/i.test(text);
-    }
-
     applyFilter() {
         if (!this.active) {
             this.removePanel();
             return;
         }
 
-        const data = this.collectActiveMembers();
+        // Re-derive only when presence changed, the server changed, or the
+        // cached collection has gone stale as a backstop for a missed event.
+        const guildId = this.currentGuildId();
+        const stale = Date.now() - (this.lastCollectedAt || 0) > 15000;
+        if (
+            this.collectionDirty ||
+            stale ||
+            !this.lastCollection ||
+            this.lastCollection.guildId !== guildId
+        ) {
+            this.collectActiveMembers();
+            this.collectionDirty = false;
+            this.lastCollectedAt = Date.now();
+        }
+        const data = this.lastCollection;
 
         // Rebuilding the DOM every tick would reset scroll position and flicker,
         // so only re-render when the membership or their activities change.
         const signature = JSON.stringify([
             data.guildId,
-            data.groups.map((g) => [g.name, g.members.map((m) => `${m.id}:${m.activity.label}`)]),
+            data.groups.map((g) => [
+                g.name,
+                g.members.map((m) => `${m.id}:${m.status}:${m.activity.label}`),
+            ]),
         ]);
 
         if (!this.panel || !document.body.contains(this.panel)) {
@@ -992,11 +1157,17 @@ module.exports = class ActiveMembersFilter {
                     }
                 });
 
+                const avatarWrap = document.createElement("div");
+                avatarWrap.className = "amf-avatar-wrap";
                 const img = document.createElement("img");
                 img.className = "amf-avatar";
                 img.src = member.avatar;
                 img.alt = "";
-                row.appendChild(img);
+                avatarWrap.appendChild(img);
+                const dot = document.createElement("span");
+                dot.className = `amf-status amf-status-${member.status}`;
+                avatarWrap.appendChild(dot);
+                row.appendChild(avatarWrap);
 
                 const text = document.createElement("div");
                 text.className = "amf-member-text";
@@ -1018,13 +1189,6 @@ module.exports = class ActiveMembersFilter {
                 panel.appendChild(row);
             }
         }
-    }
-
-    showAll() {
-        document
-            .querySelectorAll(".amf-hidden-row")
-            .forEach((el) => el.classList.remove("amf-hidden-row"));
-        this.removePanel();
     }
 
     // --------------------------------------------------------------- button
@@ -1085,8 +1249,9 @@ module.exports = class ActiveMembersFilter {
                 return;
             }
             this.active = !this.active;
+            this.collectionDirty = true;
             btn.classList.toggle("amf-active", this.active);
-            if (!this.active) this.showAll();
+            if (!this.active) this.removePanel();
             this.updateButtonLabel();
             this.applyFilter();
         });
@@ -1184,7 +1349,7 @@ module.exports = class ActiveMembersFilter {
         if (presence) push(`  presence.getActivities is fn: ${typeof presence.getActivities === "function"}`);
         push("");
 
-        const sidebar = this.resolveSidebar();
+        const sidebar = this.resolveSidebar(true);
         this.sidebar = sidebar;
         push("--- SIDEBAR STRATEGY SCOREBOARD (plausible/candidates) ---");
         for (const [name] of this.sidebarStrategies) {
@@ -1219,7 +1384,7 @@ module.exports = class ActiveMembersFilter {
         push("");
 
         // --- which row strategy works -------------------------------------
-        const rows = this.resolveRows();
+        const rows = this.resolveRows(true);
         push("--- ROW STRATEGY SCOREBOARD ---");
         push(`Avatars in sidebar: ${this.strategyStats.total}`);
         for (const [name] of this.rowStrategies) {
@@ -1227,7 +1392,6 @@ module.exports = class ActiveMembersFilter {
             const mark = name === this.rowStrategy ? "  <== USING" : "";
             push(`  ${name.padEnd(20)} resolved ${hits === undefined ? "n/a" : hits}${mark}`);
         }
-        push(`content-visibility override injected: ${this.cvOverrideActive}`);
         push("");
 
         // Coverage check. Discord's role group headers read "Minion — 10", so
@@ -1264,6 +1428,7 @@ module.exports = class ActiveMembersFilter {
         push(`Unique members considered:    ${collection.considered}`);
         push(`Active members found:         ${collection.total}`);
         push(`Bots/apps excluded:           ${collection.botsExcluded}`);
+        push(`Non-friends excluded:         ${collection.nonFriendsExcluded}`);
         push(`Role source:                  ${collection.roleSource}`);
         push(
             `Roles in guild:               ${
@@ -1333,15 +1498,15 @@ module.exports = class ActiveMembersFilter {
         push("");
 
         // --- per-row detection results ------------------------------------
-        push("--- ROWS (store activity vs. scraped text) ---");
+        push("--- ROWS (as seen in the rendered DOM) ---");
         rows.slice(0, 30).forEach((row, i) => {
             const h = row.el.getBoundingClientRect().height.toFixed(0);
-            const store = this.activityForUser(row.userId);
+            const store = this.activityInfoForUser(row.userId);
             const friend = this.isFriend(row.userId);
             const txt = (row.el.textContent || "").replace(/\n/g, " | ").slice(0, 34);
             push(
                 `#${String(i).padStart(2)} h=${String(h).padStart(3)} id=${row.userId || "?"} ` +
-                    `friend=${friend === null ? "?" : friend} active=${this.rowIsActive(row)}`
+                    `friend=${friend === null ? "?" : friend} active=${!!store}`
             );
             push(`     store="${store ? store.label || "(none)" : "STORE UNAVAILABLE"}" text="${txt}"`);
         });
@@ -1349,7 +1514,7 @@ module.exports = class ActiveMembersFilter {
 
         // --- conclusions ---------------------------------------------------
         push("--- READ THIS ---");
-        const anyActive = rows.some((r) => this.rowIsActive(r));
+        const anyActive = rows.some((r) => !!this.activityInfoForUser(r.userId));
         if (!presence) {
             push("• PresenceStore did NOT resolve. Activity detection is falling back to");
             push("  scraping text, which is language-dependent and misses unpainted rows.");

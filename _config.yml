@@ -1,0 +1,6 @@
+title: ActiveMembersFilter
+description: >-
+  A BetterDiscord plugin that filters the Discord server member list down to the
+  members currently playing a game, streaming, listening to Spotify or watching
+  something, grouped by role.
+theme: jekyll-theme-cayman

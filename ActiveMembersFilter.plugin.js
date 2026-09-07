@@ -1,6 +1,7 @@
 /**
  * @name ActiveMembersFilter
  * @author TheRealestNwah
+ * @authorLink https://github.com/TheRealestNwah
  * @source https://github.com/TheRealestNwah/ActiveMembersFilter
  * @website https://github.com/TheRealestNwah/ActiveMembersFilter
  * @description Adds a toggle to the channel header that replaces the member list with just the people currently playing a game, listening to Spotify, streaming or watching something.

@@ -117,7 +117,9 @@ module.exports = class ActiveFriendsFilter {
                 background: var(--background-secondary, #2b2d31);
                 overflow-y: auto;
                 overflow-x: hidden;
-                padding: 8px 0 16px;
+                /* Top padding clears the toggle button, which floats over the
+                   same corner of the member list. */
+                padding: 46px 0 16px;
             }
             .aff-panel-head {
                 padding: 4px 16px 2px;
@@ -397,36 +399,65 @@ module.exports = class ActiveFriendsFilter {
     // older ones keep them on the guild record itself. Try each in turn, since
     // reading only guild.roles silently yields no roles on a build that moved
     // them — which collapses every member into the ungrouped bucket.
-    rolesForGuild(guildId) {
-        if (!guildId) return null;
-        const sources = [
+    // Returns a lookup function so every store shape is handled identically
+    // downstream, and records which source answered. Some builds also expose
+    // only a per-role getter with no way to enumerate the full map, hence the
+    // second pass.
+    roleResolver(guildId) {
+        this.roleSource = "none";
+        this.roleCount = 0;
+        this.hoistedCount = 0;
+        if (!guildId) return () => null;
+
+        const bulkSources = [
             ["GuildRoleStore.getRoles", () => this.stores.guildRole?.getRoles?.(guildId)],
             ["GuildStore.getRoles", () => this.stores.guild?.getRoles?.(guildId)],
             ["guild.roles", () => this.stores.guild?.getGuild?.(guildId)?.roles],
         ];
-        for (const [name, fn] of sources) {
+        for (const [name, fn] of bulkSources) {
             try {
                 const roles = fn();
                 if (roles && Object.keys(roles).length) {
                     this.roleSource = name;
-                    return roles;
+                    this.roleCount = Object.keys(roles).length;
+                    this.hoistedCount = Object.values(roles).filter((r) => r?.hoist).length;
+                    return (roleId) => roles[roleId] || null;
                 }
             } catch (e) {
                 /* try the next source */
             }
         }
-        this.roleSource = "none";
-        return null;
+
+        // No enumerable map anywhere — fall back to per-role getters.
+        const singleSources = [
+            ["GuildRoleStore.getRole", this.stores.guildRole?.getRole, this.stores.guildRole],
+            ["GuildStore.getRole", this.stores.guild?.getRole, this.stores.guild],
+        ];
+        for (const [name, getter, store] of singleSources) {
+            if (typeof getter !== "function") continue;
+            this.roleSource = name;
+            this.roleCount = -1; // not enumerable through this path
+            this.hoistedCount = -1;
+            return (roleId) => {
+                try {
+                    return getter.call(store, guildId, roleId) || null;
+                } catch (e) {
+                    return null;
+                }
+            };
+        }
+
+        return () => null;
     }
 
     // Mirrors how Discord groups the member list: by the member's highest
     // hoisted role. Members with no hoisted role fall into "Online".
-    groupFromMember(member, roles) {
+    groupFromMember(member, lookupRole) {
         const fallback = { name: "Online", position: -1 };
-        if (!member || !roles) return fallback;
+        if (!member) return fallback;
         let best = null;
         for (const roleId of member.roles || []) {
-            const role = roles[roleId];
+            const role = lookupRole(roleId);
             if (role?.hoist && (!best || role.position > best.position)) best = role;
         }
         return best ? { name: best.name, position: best.position } : fallback;
@@ -473,18 +504,19 @@ module.exports = class ActiveFriendsFilter {
             .filter(Boolean);
 
         const ids = Array.from(new Set([...storeIds, ...domIds]));
-        const roles = this.rolesForGuild(guildId);
-        const hoistedRoles = roles ? Object.values(roles).filter((r) => r?.hoist).length : 0;
+        const lookupRole = this.roleResolver(guildId);
         const byGroup = new Map();
         let total = 0;
         let withRecord = 0;
+        let withRoleIds = 0;
 
         for (const id of ids) {
             const activity = this.activityInfoForUser(id);
             if (!activity) continue;
             const member = this.safeMember(guildId, id);
             if (member) withRecord++;
-            const group = this.groupFromMember(member, roles);
+            if (member?.roles?.length) withRoleIds++;
+            const group = this.groupFromMember(member, lookupRole);
             const { name, color } = this.displayNameFor(id, member);
             const entry = { id, name, color, activity, avatar: this.avatarUrlFor(guildId, id) };
 
@@ -508,9 +540,10 @@ module.exports = class ActiveFriendsFilter {
             total,
             groups,
             roleSource: this.roleSource || "none",
-            rolesFound: roles ? Object.keys(roles).length : 0,
-            hoistedRoles,
+            rolesFound: this.roleCount,
+            hoistedRoles: this.hoistedCount,
             activeWithMemberRecord: withRecord,
+            activeWithRoleIds: withRoleIds,
         };
         return this.lastCollection;
     }
@@ -1045,17 +1078,25 @@ module.exports = class ActiveFriendsFilter {
         push(`Unique members considered:    ${collection.considered}`);
         push(`Active members found:         ${collection.total}`);
         push(`Role source:                  ${collection.roleSource}`);
-        push(`Roles in guild:               ${collection.rolesFound} (${collection.hoistedRoles} hoisted)`);
+        push(
+            `Roles in guild:               ${
+                collection.rolesFound < 0 ? "not enumerable" : collection.rolesFound
+            } (${collection.hoistedRoles < 0 ? "?" : collection.hoistedRoles} hoisted)`
+        );
         push(`Active with a member record:  ${collection.activeWithMemberRecord}/${collection.total}`);
-        if (collection.rolesFound === 0) {
-            push("→ No roles resolved from any store: grouping cannot work, everyone");
+        push(`Active with role ids on it:   ${collection.activeWithRoleIds}/${collection.total}`);
+        if (collection.roleSource === "none") {
+            push("→ No role data from any store: grouping cannot work and everyone");
             push("  falls into the ungrouped bucket. This is a bug, report it.");
-        } else if (collection.hoistedRoles === 0) {
-            push("→ Roles resolved but none are hoisted (\"Display separately\" off),");
-            push("  so a single ungrouped list is CORRECT for this server.");
         } else if (collection.activeWithMemberRecord < collection.total) {
             push("→ Some active members have no loaded member record, so their roles");
             push("  are unknown and they fall into the ungrouped bucket.");
+        } else if (collection.activeWithRoleIds === 0) {
+            push("→ Member records exist but carry no role ids, so there is nothing");
+            push("  to group by. The member record shape has changed; report it.");
+        } else if (collection.hoistedRoles === 0) {
+            push('→ Roles resolved but none are hoisted ("Display separately" off),');
+            push("  so a single ungrouped list is CORRECT for this server.");
         }
         collection.groups.forEach((g) => {
             push(`  ${g.name} — ${g.members.length}`);

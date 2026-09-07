@@ -128,8 +128,8 @@ Both symptoms had one cause. Use `textContent` when reading unpainted DOM.
 
 **Scraped text is the wrong signal entirely.** Matching `"Playing "` against a row's text
 breaks on any non-English client, misses members whose activity line Discord never renders,
-and produces false positives — one member in the test server is literally called
-`Playing Catchup`. `PresenceStore` has none of these problems and is language-independent.
+and produces false positives — a member whose display name simply begins with "Playing"
+matches. `PresenceStore` has none of these problems and is language-independent.
 
 **Don't gate your debug UI behind the thing you're debugging.** An early version only
 created the button *after* the member list was found, so when detection failed there was no

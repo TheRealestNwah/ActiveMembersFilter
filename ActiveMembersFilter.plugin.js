@@ -377,11 +377,11 @@ module.exports = class ActiveMembersFilter {
             }
             .amf-platform {
                 flex: 0 0 auto;
-                width: 14px;
-                height: 14px;
+                height: 13px;
+                width: auto;
             }
-            .amf-platform-playstation { color: #2e6fdb; }
-            .amf-platform-xbox { color: #4caf50; }
+            .amf-platform-playstation { color: #0070d1; }
+            .amf-platform-xbox { color: #107b10; }
             .amf-empty {
                 padding: 28px 16px;
                 font-size: 13px;
@@ -496,57 +496,41 @@ module.exports = class ActiveMembersFilter {
         };
     }
 
-    // Drawn here rather than lifted from Discord, whose platform icons are
-    // React components inside its bundle and not reachable as assets.
+    // Official platform marks, kept at their own viewBox so the path data is
+    // used verbatim rather than rescaled. Sized by CSS, and filled with
+    // currentColor so the colour lives in one place.
+    platformIcons() {
+        return {
+            playstation: {
+                viewBox: "0 0 122.88 95.18",
+                path: "M2.49,69.39c-4.61,3.07-3.07,8.9,6.75,11.67c10.13,3.38,21.18,4.3,31.93,2.46c0.61,0,1.23-0.31,1.54-0.31 V72.76l-10.44,3.38c-3.99,1.23-7.98,1.54-11.97,0.61c-3.07-0.92-2.46-2.76,1.23-4.3l21.18-7.37V53.73L13.23,63.86 C9.55,65.09,5.86,66.93,2.49,69.39L2.49,69.39z M73.71,23.33v29.78c12.59,6.14,22.41,0,22.41-15.96c0-16.27-5.83-23.64-22.72-29.47 C64.5,4.6,55.29,1.84,46.08,0v88.73l21.49,6.45V20.57c0-3.38,0-5.83,2.46-4.91C73.41,16.58,73.71,19.96,73.71,23.33L73.71,23.33z M113.63,62.32c-8.9-3.07-18.42-4.3-27.63-3.38c-4.91,0.31-9.52,1.54-13.82,3.07l-0.92,0.31V74.3l19.96-7.37 c3.99-1.23,7.98-1.54,11.97-0.61c3.07,0.92,2.46,2.76-1.23,4.3l-30.7,11.36v11.67l42.37-15.66c3.07-1.23,5.83-2.76,8.29-5.22 C124.07,69.69,123.15,65.39,113.63,62.32L113.63,62.32z",
+            },
+            xbox: {
+                viewBox: "0 0 1331.67 1333.33",
+                path: "M665.83 534.66s1.66 0 0 0c200.91 152.76 541.3 528.02 438.35 634.29-117.89 102.95-270.65 164.39-438.35 164.39-167.7 0-322.13-61.44-438.35-164.39-104.61-106.27 237.44-481.53 436.69-632.63 0-1.66 1.66-1.66 1.66-1.66zm347.03-436.7C911.57 36.52 800.32-.01 665.83-.01c-134.5 0-245.74 36.53-347.03 97.97-1.66 0-1.66 1.66-1.66 3.32s1.66 1.66 3.32 1.66c129.51-28.23 325.44 83.02 343.71 94.65h3.32c18.26-11.62 214.2-122.87 343.71-94.65 1.66 0 3.32 0 3.32-1.66s0-3.32-1.66-3.32zm-813.61 92.98c-1.66 0-1.66 1.66-3.32 1.66C74.72 313.81 0 481.52 0 665.82c0 151.1 51.48 292.24 136.16 403.49 0 1.66 1.66 1.66 3.32 1.66s1.66-1.66 0-3.32C88 909.91 348.69 529.67 483.19 370.26l1.66-1.66c0-1.66 0-1.66-1.66-1.66-204.23-202.57-272.31-180.99-283.93-176.01zm649.23 174.35l-1.66 1.66s0 1.66 1.66 1.66C982.98 528.01 1242 908.26 1192.19 1066v3.32c1.66 0 3.32 0 3.32-1.66 84.68-111.25 136.16-252.39 136.16-403.49 0-184.31-74.72-352.01-197.59-473.22-1.66-1.66-1.66-1.66-3.32-1.66-9.96-3.32-78.04-24.91-282.27 176.01z",
+                fillRule: "nonzero",
+            },
+        };
+    }
+
     buildPlatformIcon(platform) {
+        const icon = this.platformIcons()[platform];
+        if (!icon) return null;
+
         const NS = "http://www.w3.org/2000/svg";
         const svg = document.createElementNS(NS, "svg");
-        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("viewBox", icon.viewBox);
         svg.setAttribute("aria-hidden", "true");
         svg.setAttribute("class", `amf-platform amf-platform-${platform}`);
 
-        const add = (tag, attrs) => {
-            const el = document.createElementNS(NS, tag);
-            for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v));
-            svg.appendChild(el);
-        };
+        const path = document.createElementNS(NS, "path");
+        path.setAttribute("d", icon.path);
+        path.setAttribute("fill", "currentColor");
+        if (icon.fillRule) path.setAttribute("fill-rule", icon.fillRule);
 
-        if (platform === "xbox") {
-            // A sphere with a curved X through it.
-            add("circle", {
-                cx: 12,
-                cy: 12,
-                r: 10,
-                fill: "none",
-                stroke: "currentColor",
-                "stroke-width": 2,
-            });
-            const stroke = {
-                fill: "none",
-                stroke: "currentColor",
-                "stroke-width": 2.4,
-                "stroke-linecap": "round",
-            };
-            add("path", Object.assign({ d: "M6.6 5.4C9.2 8.2 14.8 15.8 17.4 18.6" }, stroke));
-            add("path", Object.assign({ d: "M17.4 5.4C14.8 8.2 9.2 15.8 6.6 18.6" }, stroke));
-        } else if (platform === "playstation") {
-            // The four face buttons, which read as PlayStation even at 14px.
-            const line = {
-                fill: "none",
-                stroke: "currentColor",
-                "stroke-width": 2,
-                "stroke-linecap": "round",
-                "stroke-linejoin": "round",
-            };
-            add("path", Object.assign({ d: "M12 2.6 8.9 8.2h6.2Z" }, line)); // triangle
-            add("circle", Object.assign({ cx: 18.6, cy: 12, r: 3.1 }, line)); // circle
-            add("path", Object.assign({ d: "M9.8 13.8 14.2 18.2M14.2 13.8 9.8 18.2" }, line)); // cross
-            add("rect", Object.assign({ x: 2.3, y: 8.9, width: 6.2, height: 6.2, rx: 1 }, line)); // square
-        }
-
+        svg.appendChild(path);
         return svg;
     }
-
     buildStatusDot(status) {
         const NS = "http://www.w3.org/2000/svg";
         const colors = this.statusColors();
@@ -1383,9 +1367,10 @@ module.exports = class ActiveMembersFilter {
 
                 const activity = document.createElement("div");
                 activity.className = "amf-activity";
-                if (member.activity.platform) {
-                    activity.appendChild(this.buildPlatformIcon(member.activity.platform));
-                }
+                const platformIcon = member.activity.platform
+                    ? this.buildPlatformIcon(member.activity.platform)
+                    : null;
+                if (platformIcon) activity.appendChild(platformIcon);
                 const activityText = document.createElement("span");
                 activityText.textContent = member.activity.label;
                 activity.appendChild(activityText);

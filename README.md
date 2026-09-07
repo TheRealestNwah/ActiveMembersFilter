@@ -81,9 +81,9 @@ platform when nothing better is set.
 
 When someone plays with a linked console account, Discord tags the activity with a
 `platform` (`ps4`, `ps5`, `xbox`), and the panel shows a small icon for it. PC and mobile
-show none, since an icon on nearly every row is noise. Discord's own platform icons are
-React components inside its bundle rather than fetchable assets, so these are drawn in the
-plugin and will not match Discord's exactly.
+show none, since an icon on nearly every row is noise. The marks are the official
+PlayStation and Xbox logos, inlined as SVG path data because a BetterDiscord plugin has to
+be a single file.
 
 Status indicators reproduce Discord's shapes rather than plain dots: a crescent for idle, a
 bar for do-not-disturb, a play triangle for streaming, a ring for offline. Streaming is

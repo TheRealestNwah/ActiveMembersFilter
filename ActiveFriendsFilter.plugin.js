@@ -38,6 +38,10 @@ module.exports = class ActiveFriendsFilter {
         this.panel = null;
         this.panelSignature = null;
         this.lastCollection = null;
+
+        this.buttonHome = null; // "toolbar" | "floating"
+        this.buttonLabel = null;
+        this._profileOpener = undefined; // undefined = not looked up yet
     }
 
     log(...args) {
@@ -72,7 +76,42 @@ module.exports = class ActiveFriendsFilter {
         const style = document.createElement("style");
         style.id = this.styleId;
         style.textContent = `
-            .aff-toggle-btn {
+            /* Preferred home: an icon button in the channel header toolbar,
+               sized and coloured like Discord's own icons there. */
+            .aff-toggle-btn.aff-in-toolbar {
+                position: relative;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                width: 24px;
+                height: 24px;
+                margin: 0 8px;
+                padding: 0;
+                border: none;
+                border-radius: 4px;
+                background: none;
+                box-shadow: none;
+                cursor: pointer;
+                color: var(--interactive-normal, #b5bac1);
+            }
+            .aff-toggle-btn.aff-in-toolbar:hover {
+                color: var(--interactive-hover, #dbdee1);
+            }
+            .aff-toggle-btn.aff-in-toolbar.aff-active {
+                color: var(--brand-experiment, #5865f2);
+            }
+            .aff-toggle-btn.aff-in-toolbar.aff-idle {
+                opacity: 0.4;
+            }
+            .aff-toggle-btn.aff-in-toolbar .aff-label {
+                display: none;
+            }
+            .aff-toggle-btn svg {
+                width: 24px;
+                height: 24px;
+            }
+            /* Fallback if the toolbar can't be found: the old floating pill. */
+            .aff-toggle-btn.aff-floating {
                 position: fixed;
                 top: 90px;
                 right: 20px;
@@ -92,17 +131,21 @@ module.exports = class ActiveFriendsFilter {
                 box-shadow: 0 2px 6px rgba(0,0,0,0.3);
                 white-space: nowrap;
             }
-            .aff-toggle-btn:hover {
+            .aff-toggle-btn.aff-floating:hover {
                 background: var(--background-modifier-hover, #35373c);
             }
-            .aff-toggle-btn.aff-active {
+            .aff-toggle-btn.aff-floating.aff-active {
                 background: var(--brand-experiment, #5865f2);
                 color: #fff;
                 border-color: var(--brand-experiment, #5865f2);
             }
-            .aff-toggle-btn.aff-idle {
+            .aff-toggle-btn.aff-floating.aff-idle {
                 opacity: 0.75;
                 border-style: dashed;
+            }
+            .aff-toggle-btn.aff-floating svg {
+                width: 16px;
+                height: 16px;
             }
             .aff-hidden-row {
                 display: none !important;
@@ -117,9 +160,7 @@ module.exports = class ActiveFriendsFilter {
                 background: var(--background-secondary, #2b2d31);
                 overflow-y: auto;
                 overflow-x: hidden;
-                /* Top padding clears the toggle button, which floats over the
-                   same corner of the member list. */
-                padding: 46px 0 16px;
+                padding: 8px 0 16px;
             }
             .aff-panel-head {
                 padding: 4px 16px 2px;
@@ -140,9 +181,13 @@ module.exports = class ActiveFriendsFilter {
                 margin: 0 8px;
                 padding: 5px 8px;
                 border-radius: 4px;
+                cursor: pointer;
             }
             .aff-member:hover {
                 background: var(--background-modifier-hover, #35373c);
+            }
+            .aff-member:active {
+                background: var(--background-modifier-selected, #3f4147);
             }
             .aff-avatar {
                 width: 32px;
@@ -463,10 +508,24 @@ module.exports = class ActiveFriendsFilter {
         return best ? { name: best.name, position: best.position } : fallback;
     }
 
-    displayNameFor(userId, member) {
+    safeUser(userId) {
+        try {
+            return this.stores.user?.getUser?.(userId) || null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // Bots and system accounts are the ones Discord marks with an APP tag.
+    // A user we cannot look up is treated as human: better to show someone
+    // who should have been filtered than to silently drop a real person.
+    isApp(user) {
+        return !!(user?.bot || user?.system);
+    }
+
+    displayNameFor(userId, member, user) {
         try {
             if (member?.nick) return { name: member.nick, color: member.colorString || null };
-            const user = this.stores.user?.getUser?.(userId);
             return {
                 name: user?.globalName || user?.username || userId,
                 color: member?.colorString || null,
@@ -476,9 +535,8 @@ module.exports = class ActiveFriendsFilter {
         }
     }
 
-    avatarUrlFor(guildId, userId) {
+    avatarUrlFor(guildId, userId, user) {
         try {
-            const user = this.stores.user?.getUser?.(userId);
             if (user?.getAvatarURL) {
                 const url = user.getAvatarURL(guildId, 40);
                 if (url) return url;
@@ -509,16 +567,24 @@ module.exports = class ActiveFriendsFilter {
         let total = 0;
         let withRecord = 0;
         let withRoleIds = 0;
+        let botsExcluded = 0;
 
         for (const id of ids) {
             const activity = this.activityInfoForUser(id);
             if (!activity) continue;
+
+            const user = this.safeUser(id);
+            if (this.isApp(user)) {
+                botsExcluded++;
+                continue;
+            }
+
             const member = this.safeMember(guildId, id);
             if (member) withRecord++;
             if (member?.roles?.length) withRoleIds++;
             const group = this.groupFromMember(member, lookupRole);
-            const { name, color } = this.displayNameFor(id, member);
-            const entry = { id, name, color, activity, avatar: this.avatarUrlFor(guildId, id) };
+            const { name, color } = this.displayNameFor(id, member, user);
+            const entry = { id, name, color, activity, avatar: this.avatarUrlFor(guildId, id, user) };
 
             if (!byGroup.has(group.name)) {
                 byGroup.set(group.name, { name: group.name, position: group.position, members: [] });
@@ -544,6 +610,7 @@ module.exports = class ActiveFriendsFilter {
             hoistedRoles: this.hoistedCount,
             activeWithMemberRecord: withRecord,
             activeWithRoleIds: withRoleIds,
+            botsExcluded,
         };
         return this.lastCollection;
     }
@@ -812,6 +879,52 @@ module.exports = class ActiveFriendsFilter {
         this.positionPanel();
     }
 
+    // Discord's own "open profile" action. Resolved once and cached, since a
+    // failed Webpack search is not cheap.
+    profileOpener() {
+        if (this._profileOpener !== undefined) return this._profileOpener;
+        this._profileOpener = null;
+        try {
+            const W = window.BdApi?.Webpack;
+            const mod =
+                W?.getByKeys?.("openUserProfileModal") ||
+                W?.getModule?.((m) => m?.openUserProfileModal);
+            if (typeof mod?.openUserProfileModal === "function") {
+                this._profileOpener = (args) => mod.openUserProfileModal(args);
+            }
+        } catch (e) {
+            this.log("profile opener lookup failed", e);
+        }
+        this.log(`profile opener resolved: ${!!this._profileOpener}`);
+        return this._profileOpener;
+    }
+
+    openProfile(userId) {
+        if (!userId) return false;
+        const guildId = this.currentGuildId();
+
+        const open = this.profileOpener();
+        if (open) {
+            try {
+                open({ userId, guildId });
+                return true;
+            } catch (e) {
+                this.log("openUserProfileModal failed", e);
+            }
+        }
+
+        // Fallback: click Discord's own row for this member, when it happens to
+        // be one of the rendered ones.
+        const row = (this.lastRows || []).find((r) => r.userId === userId);
+        if (row?.el) {
+            row.el.dispatchEvent(
+                new MouseEvent("click", { bubbles: true, cancelable: true, view: window })
+            );
+            return true;
+        }
+        return false;
+    }
+
     buildPanel() {
         this.removePanel();
         const panel = document.createElement("div");
@@ -833,6 +946,8 @@ module.exports = class ActiveFriendsFilter {
         this.panel.style.left = `${r.left}px`;
         this.panel.style.width = `${r.width}px`;
         this.panel.style.height = `${r.height}px`;
+        // Only the floating fallback overlaps the panel and needs clearing.
+        this.panel.style.paddingTop = this.buttonHome === "floating" ? "46px" : "8px";
     }
 
     renderPanel(data) {
@@ -866,6 +981,16 @@ module.exports = class ActiveFriendsFilter {
             for (const member of group.members) {
                 const row = document.createElement("div");
                 row.className = "aff-member";
+                row.setAttribute("role", "button");
+                row.setAttribute("tabindex", "0");
+                row.title = `${member.name} — ${member.activity.label}`;
+                row.addEventListener("click", () => this.openProfile(member.id));
+                row.addEventListener("keydown", (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        this.openProfile(member.id);
+                    }
+                });
 
                 const img = document.createElement("img");
                 img.className = "aff-avatar";
@@ -904,10 +1029,55 @@ module.exports = class ActiveFriendsFilter {
 
     // --------------------------------------------------------------- button
 
+    // Discord's channel-header toolbar: the row of icons at top right holding
+    // threads, notifications, pinned messages, member list and search. Matched
+    // by position rather than by its hashed class name.
+    findToolbar() {
+        for (const el of document.querySelectorAll('[class*="toolbar"]')) {
+            const r = el.getBoundingClientRect();
+            if (
+                r.height > 16 &&
+                r.height < 60 &&
+                r.top < 80 &&
+                r.right > window.innerWidth * 0.4 &&
+                el.children.length >= 2
+            ) {
+                return el;
+            }
+        }
+        return null;
+    }
+
+    // Built with createElementNS rather than innerHTML so the plugin never
+    // parses markup at runtime.
+    buildIcon() {
+        const NS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(NS, "svg");
+        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("fill", "currentColor");
+        svg.setAttribute("aria-hidden", "true");
+        const path = document.createElementNS(NS, "path");
+        path.setAttribute(
+            "d",
+            "M7.5 6h9a5.5 5.5 0 0 1 5.44 4.72l.86 6A3.5 3.5 0 0 1 19.34 21a3.5 3.5 0 0 1-2.9-1.55L15.2 17.6a1.5 1.5 0 0 0-1.25-.67h-3.9a1.5 1.5 0 0 0-1.25.67l-1.24 1.85A3.5 3.5 0 0 1 4.66 21a3.5 3.5 0 0 1-3.46-4.28l.86-6A5.5 5.5 0 0 1 7.5 6Zm-.25 3.5v1.75H5.5v1.5h1.75v1.75h1.5v-1.75h1.75v-1.5H8.75V9.5h-1.5ZM15.5 10a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm2.5 2.5a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z"
+        );
+        svg.appendChild(path);
+        return svg;
+    }
+
     mountButton() {
         document.querySelectorAll(".aff-toggle-btn").forEach((el) => el.remove());
         const btn = document.createElement("div");
         btn.className = "aff-toggle-btn";
+        btn.setAttribute("role", "button");
+        btn.setAttribute("tabindex", "0");
+        btn.appendChild(this.buildIcon());
+
+        const label = document.createElement("span");
+        label.className = "aff-label";
+        btn.appendChild(label);
+        this.buttonLabel = label;
+
         btn.addEventListener("click", () => {
             if (!this.sidebar) {
                 // Nothing to filter yet — show why, rather than doing nothing.
@@ -924,35 +1094,50 @@ module.exports = class ActiveFriendsFilter {
             e.preventDefault();
             this.dumpDebugInfo();
         });
-        document.body.appendChild(btn);
+
+        // Sit in Discord's own toolbar when we can find it; fall back to a
+        // floating pill so the control is never simply absent.
+        const toolbar = this.findToolbar();
+        if (toolbar) {
+            btn.classList.add("aff-in-toolbar");
+            toolbar.insertBefore(btn, toolbar.firstChild);
+            this.buttonHome = "toolbar";
+        } else {
+            btn.classList.add("aff-floating");
+            document.body.appendChild(btn);
+            this.buttonHome = "floating";
+        }
+
         this.button = btn;
         this.updateButtonLabel();
         this.positionButton();
-        this.log("button mounted");
+        this.log(`button mounted (${this.buttonHome})`);
     }
 
     updateButtonLabel() {
         if (!this.button) return;
         if (!this.sidebar) {
-            this.button.innerText = "🎮 No member list";
+            if (this.buttonLabel) this.buttonLabel.textContent = "No member list";
             this.button.title =
-                "Member list not detected. Open it with the people icon in the top right, or click for debug info.";
+                "Active only — member list not detected. Open it with the people icon, or click for debug info.";
             this.button.classList.add("aff-idle");
             this.button.classList.remove("aff-active");
             return;
         }
         this.button.classList.remove("aff-idle");
-        this.button.innerText = this.active ? "🎮 Showing Active Only" : "🎮 Show Active Only";
-        this.button.title = "Left-click: toggle filter. Right-click: on-screen debug panel.";
+        if (this.buttonLabel) {
+            this.buttonLabel.textContent = this.active ? "Showing Active Only" : "Show Active Only";
+        }
+        this.button.title = this.active
+            ? "Showing active members only. Click to show everyone. Right-click for debug info."
+            : "Show active members only. Right-click for debug info.";
     }
 
-    // Parks top-right by default and only moves over the member list once one
-    // is found, so the button can never end up positioned off-screen.
+    // Only meaningful in the floating fallback; in the toolbar the button is
+    // laid out by Discord like any other icon there.
     positionButton() {
-        if (!this.button) return;
+        if (!this.button || this.buttonHome !== "floating") return;
         if (!this.sidebar) {
-            // Parked below Discord's title bar and search field, not under the
-            // window controls where it is easy to miss.
             this.button.style.left = "";
             this.button.style.right = "20px";
             this.button.style.top = "90px";
@@ -985,7 +1170,8 @@ module.exports = class ActiveFriendsFilter {
         push("ACTIVE FRIENDS FILTER — DEBUG");
         push("=============================");
         push(`window: ${window.innerWidth}x${window.innerHeight}  dpr=${window.devicePixelRatio}`);
-        push(`button mounted: ${!!this.button && document.body.contains(this.button)}`);
+        push(`button mounted: ${!!this.button && document.body.contains(this.button)} (${this.buttonHome || "unmounted"})`);
+        push(`profile opener resolved: ${!!this.profileOpener()}`);
         push(`layer considered open (button hidden): ${this.isLayerOpen()}`);
         push(`last tick error: ${this.lastError ? this.lastError.message : "none"}`);
         push("");
@@ -1077,6 +1263,7 @@ module.exports = class ActiveFriendsFilter {
         push(`Member ids from rendered DOM: ${collection.domIds}`);
         push(`Unique members considered:    ${collection.considered}`);
         push(`Active members found:         ${collection.total}`);
+        push(`Bots/apps excluded:           ${collection.botsExcluded}`);
         push(`Role source:                  ${collection.roleSource}`);
         push(
             `Roles in guild:               ${

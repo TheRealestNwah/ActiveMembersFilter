@@ -21,18 +21,15 @@ On Windows you can run `.\install.ps1` from this folder to do step 1 for you.
 
 ## Usage
 
-A small pill-shaped button sits at the top of the member list.
+A controller icon is added to the channel header toolbar, alongside Discord's own threads,
+pins and member-list icons. Click it to toggle the filter; it turns blue while active, and
+dims when no member list is detected. If the toolbar cannot be found, the button falls back
+to a floating pill over the member list rather than disappearing.
 
-| Button reads | Meaning |
-| --- | --- |
-| `🎮 Show Active Only` | Member list found. Click to filter. |
-| `🎮 Showing Active Only` | Filter is on. Click to restore the full list. |
-| `🎮 No member list` (dimmed, dashed) | Nothing detected. Click for the debug panel. |
-
-**Right-click the button** at any time for an on-screen debug panel reporting which
-detection strategy won, which Discord stores resolved, and what the plugin believes about
-every member. It has a **📋 Copy** button, so the dump can go into an issue without
-needing DevTools.
+**Click a member** in the panel to open their profile. **Right-click the toolbar icon** for
+an on-screen debug panel reporting which detection strategy won, which Discord stores
+resolved, and what the plugin believes about every member. It has a **📋 Copy** button, so
+the dump can go into an issue without needing DevTools.
 
 ## How it works
 
@@ -60,7 +57,9 @@ Everything comes from Discord's own Flux stores through `BdApi.Webpack`:
 | `UserStore` | Usernames and avatar URLs |
 
 Activity types 0/1/2/3/5 (playing, streaming, listening, watching, competing) count as
-active; type 4 (custom status) does not. Members are grouped by their highest **hoisted**
+active; type 4 (custom status) does not. Bots and system accounts — the ones Discord marks
+with an `APP` tag — are excluded. A user who cannot be looked up at all is treated as human,
+so a failed lookup never silently drops a real person. Members are grouped by their highest **hoisted**
 role, ordered by role position, exactly as Discord groups them — and a group header is only
 created alongside its members, so an empty group can never render a stray heading.
 
@@ -116,8 +115,6 @@ fullscreen modal, and the button was hidden a tick after being created. Measure 
   server the panel shows the active people among those, not all of them. Nothing
   client-side can enumerate a 10,000-member guild that was never fetched.
 - **Only the server member list.** The Friends tab and DM list are not touched.
-- **Rows are not clickable.** The panel is presentational; clicking a member does not open
-  their profile yet.
 
 ## License
 

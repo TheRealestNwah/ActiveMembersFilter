@@ -5,7 +5,7 @@
  * @source https://github.com/TheRealestNwah/ActiveMembersFilter
  * @website https://github.com/TheRealestNwah/ActiveMembersFilter
  * @description Adds a toggle to the channel header that replaces the member list with just the people currently playing a game, listening to Spotify, streaming or watching something.
- * @version 1.0.0
+ * @version 1.1.0
  */
 
 module.exports = class ActiveMembersFilter {
@@ -380,8 +380,8 @@ module.exports = class ActiveMembersFilter {
                 height: 13px;
                 width: auto;
             }
-            .amf-platform-playstation { color: #0070d1; }
-            .amf-platform-xbox { color: #107b10; }
+            .amf-platform-playstation { color: #4a9eff; }
+            .amf-platform-xbox { color: #4caf50; }
             .amf-empty {
                 padding: 28px 16px;
                 font-size: 13px;

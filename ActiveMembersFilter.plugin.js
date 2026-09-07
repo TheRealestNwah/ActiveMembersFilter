@@ -616,7 +616,29 @@ module.exports = class ActiveMembersFilter {
             { 0: "Playing", 1: "Streaming", 2: "Listening to", 3: "Watching", 5: "Competing in" }[
                 a.type
             ] || "Active:";
-        return { type: a.type, verb, name: a.name || "", label: `${verb} ${a.name || "?"}`.trim() };
+        return {
+            type: a.type,
+            verb,
+            name: a.name || "",
+            subject: this.activitySubject(a),
+            label: `${verb} ${this.activitySubject(a)}`.trim(),
+        };
+    }
+
+    // What the member is actually doing, as opposed to the app they are doing
+    // it in. For most activities `name` is the thing itself, but for streams
+    // and for Spotify it is only the platform:
+    //
+    //   streaming  name="Twitch"   state="HELLDIVERS 2"  details="stream title"
+    //   listening  name="Spotify"  details="track"       state="artist"
+    //
+    // so "Streaming Twitch" and "Listening to Spotify" told you nothing about
+    // what was on. Prefer the content, fall back to the platform.
+    activitySubject(a) {
+        const first = (...values) => values.find((v) => typeof v === "string" && v.trim()) || "";
+        if (a.type === 1) return first(a.state, a.details, a.name, "?");
+        if (a.type === 2) return first(a.details, a.name, "?");
+        return first(a.name, a.details, a.state, "?");
     }
 
     // ------------------------------------------------- collecting the list
@@ -1203,6 +1225,9 @@ module.exports = class ActiveMembersFilter {
     renderPanel(data) {
         const panel = this.panel;
         if (!panel) return;
+        // A re-render replaces every child, which would otherwise jump a
+        // scrolled list back to the top whenever anyone's activity changed.
+        const scrollTop = panel.scrollTop;
         panel.textContent = "";
 
         const head = document.createElement("div");
@@ -1276,6 +1301,10 @@ module.exports = class ActiveMembersFilter {
                 panel.appendChild(row);
             }
         }
+
+        // Only meaningful once the full tree is in place: assigning scrollTop
+        // to a panel that is still empty just clamps to zero.
+        panel.scrollTop = scrollTop;
     }
 
     // --------------------------------------------------------------- button

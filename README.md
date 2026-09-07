@@ -73,6 +73,12 @@ Members are grouped by their highest **hoisted** role, ordered by role position,
 Discord groups them — and a group header is only created alongside its members, so an empty
 group can never render a stray heading.
 
+For most activities Discord puts the thing itself in `name`, but for streams and for
+Spotify `name` is only the platform — a stream carries the game in `state` and the title in
+`details`, and Spotify carries the track in `details`. The panel shows the content, so a
+stream reads `Streaming HELLDIVERS 2` rather than `Streaming Twitch`, falling back to the
+platform when nothing better is set.
+
 Status indicators reproduce Discord's shapes rather than plain dots: a crescent for idle, a
 bar for do-not-disturb, a play triangle for streaming, a ring for offline. Streaming is
 taken from the activity type, because Discord reports someone streaming as plain `online`.

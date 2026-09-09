@@ -47,6 +47,11 @@ module.exports = class ActiveMembersFilter {
         this._onPresenceChange = null;
 
         this.buttonHome = null; // "toolbar" | "floating"
+        this._lastRehomeCheck = 0;
+        this._sidebarMissingSince = null;
+        // How long the member list may be absent before that counts as a real
+        // absence rather than Discord still building the view.
+        this.settleGraceMs = 3000;
         this.buttonLabel = null;
         this._profileOpener = undefined; // undefined = not looked up yet
     }
@@ -965,20 +970,34 @@ module.exports = class ActiveMembersFilter {
             this.lastError = null;
 
             if (!this.button || !document.body.contains(this.button)) this.mountButton();
+            else if (this.buttonHome === "floating") this.rehomeButton();
 
-            const layerOpen = this.isLayerOpen();
-            this.button.style.display = layerOpen ? "none" : "flex";
-            if (this.panel) this.panel.style.display = layerOpen ? "none" : "block";
-            if (layerOpen) return;
+            // Hidden rather than unmounted, so the toggle state survives a
+            // trip to the Friends tab and comes back as the user left it.
+            const hidden = this.isLayerOpen() || !this.inGuildView();
+            this.button.style.display = hidden ? "none" : "flex";
+            if (this.panel) this.panel.style.display = hidden ? "none" : "block";
+            if (hidden) return;
 
             const sidebar = this.resolveSidebar();
             if (sidebar !== this.sidebar) {
                 this.sidebar = sidebar;
                 if (sidebar) this.log(`member sidebar acquired via "${this.sidebarStrategy}"`, sidebar);
             }
+            if (this.sidebar) this._sidebarMissingSince = null;
+            else if (this._sidebarMissingSince === null) this._sidebarMissingSince = Date.now();
 
             this.positionButton();
             this.updateButtonLabel();
+
+            // Discord builds the member list a beat after the rest of the app,
+            // so on a cold start — and for a moment after switching servers —
+            // "No member list" is a true statement arriving too early to mean
+            // anything. Hold the button back until the absence looks real, so
+            // startup doesn't flash what is otherwise a failure state.
+            if (!this.sidebar && Date.now() - this._sidebarMissingSince < this.settleGraceMs) {
+                this.button.style.display = "none";
+            }
 
             if (this.active && this.sidebar) this.applyFilter();
             else if (this.active) this.removePanel(); // sidebar went away
@@ -986,6 +1005,16 @@ module.exports = class ActiveMembersFilter {
             this.lastError = e;
             console.error("[ActiveMembersFilter] tick failed:", e);
         }
+    }
+
+    // Home, the Friends tab and DMs have no server member list, so the control
+    // has nothing to act on there. Only a definite "no guild" hides it: if the
+    // store never resolved, currentGuildId is null for every view, and hiding
+    // on that would put the button — and the debug panel behind it — out of
+    // reach exactly when something is wrong.
+    inGuildView() {
+        if (!this.stores.selectedGuild) return true;
+        return !!this.currentGuildId();
     }
 
     // A layer only counts as "open" if something in it actually covers the app.
@@ -1473,6 +1502,35 @@ module.exports = class ActiveMembersFilter {
         this.updateButtonLabel();
         this.positionButton();
         this.log(`button mounted (${this.buttonHome})`);
+    }
+
+    // BetterDiscord starts plugins before Discord has finished building the
+    // channel header, so the first mount after a cold start usually lands in
+    // the floating fallback and, mounting only once, stayed there for the rest
+    // of the session — which is why a restart looked wrong until the plugin was
+    // toggled off and on. Keep watching for the toolbar and move the existing
+    // node when it appears, so the click handler and the toggle state survive.
+    rehomeButton() {
+        // findToolbar measures elements, so don't run it on every tick just
+        // because a server genuinely has no toolbar to find.
+        const now = Date.now();
+        if (now - this._lastRehomeCheck < 2000) return;
+        this._lastRehomeCheck = now;
+
+        const toolbar = this.findToolbar();
+        if (!toolbar) return;
+
+        this.button.classList.remove("amf-floating");
+        this.button.classList.add("amf-in-toolbar");
+        // Drop the absolute positioning the fallback was using.
+        this.button.style.left = "";
+        this.button.style.top = "";
+        this.button.style.right = "";
+        toolbar.insertBefore(this.button, toolbar.firstChild);
+        this.buttonHome = "toolbar";
+        // The panel reserved space for the pill that used to overlap it.
+        this.positionPanel();
+        this.log("button moved into the channel header toolbar");
     }
 
     updateButtonLabel() {

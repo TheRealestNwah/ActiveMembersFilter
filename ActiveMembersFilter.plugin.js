@@ -8,6 +8,12 @@
  * @version 1.1.1
  */
 
+/*
+ * AI disclosure: this plugin was largely written by Claude (Anthropic) through
+ * Claude Code, under the author's direction and tested by the author. See the
+ * README for details.
+ */
+
 module.exports = class ActiveMembersFilter {
     constructor() {
         this.NAME = "ActiveMembersFilter";

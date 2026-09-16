@@ -8,6 +8,10 @@ still grouped by role, with the groups nobody is active in left out.
 Built because the member list in a busy server is mostly people who aren't around, and
 scrolling it to find who is actually playing something is tedious.
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="The active members panel: members grouped by role, each showing what they are playing, streaming or listening to" width="250">
+</p>
+
 ## Install
 
 1. Copy `ActiveMembersFilter.plugin.js` into your BetterDiscord plugins folder:

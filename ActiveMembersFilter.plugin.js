@@ -5,7 +5,7 @@
  * @source https://github.com/TheRealestNwah/ActiveMembersFilter
  * @website https://github.com/TheRealestNwah/ActiveMembersFilter
  * @description Adds a toggle to the channel header that replaces the member list with just the people currently playing a game, listening to Spotify, streaming or watching something.
- * @version 1.1.1
+ * @version 1.1.2
  */
 
 /*
@@ -201,6 +201,11 @@ module.exports = class ActiveMembersFilter {
     injectStyles() {
         const style = document.createElement("style");
         style.id = this.styleId;
+        // Discord's 2025 refresh renamed its colour variables
+        // (--background-secondary became --background-base-lower, --text-normal
+        // became --text-default, ...), and the old names are no longer defined.
+        // Every colour is a chain: the current name first, since that is what
+        // themes set, then the old name for older builds, then a literal.
         style.textContent = `
             /* Preferred home: an icon button in the channel header toolbar,
                sized and coloured like Discord's own icons there. */
@@ -218,13 +223,13 @@ module.exports = class ActiveMembersFilter {
                 background: none;
                 box-shadow: none;
                 cursor: pointer;
-                color: var(--interactive-normal, #b5bac1);
+                color: var(--interactive-text-default, var(--interactive-normal, #b5bac1));
             }
             .amf-toggle-btn.amf-in-toolbar:hover {
-                color: var(--interactive-hover, #dbdee1);
+                color: var(--interactive-text-hover, var(--interactive-hover, #dbdee1));
             }
             .amf-toggle-btn.amf-in-toolbar.amf-active {
-                color: var(--brand-experiment, #5865f2);
+                color: var(--text-brand, var(--brand-500, var(--brand-experiment, #5865f2)));
             }
             .amf-toggle-btn.amf-in-toolbar.amf-idle {
                 opacity: 0.4;
@@ -250,20 +255,20 @@ module.exports = class ActiveMembersFilter {
                 font-size: 12px;
                 font-weight: 600;
                 cursor: pointer;
-                background: var(--background-secondary-alt, #2b2d31);
-                color: var(--text-normal, #dbdee1);
-                border: 1px solid var(--background-modifier-accent, #3f4147);
+                background: var(--background-surface-high, var(--background-secondary-alt, #2b2d31));
+                color: var(--text-default, var(--text-normal, #dbdee1));
+                border: 1px solid var(--border-subtle, var(--background-modifier-accent, #3f4147));
                 user-select: none;
                 box-shadow: 0 2px 6px rgba(0,0,0,0.3);
                 white-space: nowrap;
             }
             .amf-toggle-btn.amf-floating:hover {
-                background: var(--background-modifier-hover, #35373c);
+                background: var(--interactive-background-hover, var(--background-modifier-hover, #35373c));
             }
             .amf-toggle-btn.amf-floating.amf-active {
-                background: var(--brand-experiment, #5865f2);
-                color: #fff;
-                border-color: var(--brand-experiment, #5865f2);
+                background: var(--background-brand, var(--brand-500, #5865f2));
+                color: var(--white, #fff);
+                border-color: var(--background-brand, var(--brand-500, #5865f2));
             }
             .amf-toggle-btn.amf-floating.amf-idle {
                 opacity: 0.75;
@@ -280,7 +285,7 @@ module.exports = class ActiveMembersFilter {
                 position: fixed;
                 z-index: 9998;
                 box-sizing: border-box;
-                background: var(--background-secondary, #2b2d31);
+                background: var(--background-gradient-chat, var(--custom-channel-members-bg, var(--background-base-lower, var(--background-secondary, #2b2d31))));
                 overflow-y: auto;
                 overflow-x: hidden;
                 padding: 8px 0 16px;
@@ -307,10 +312,10 @@ module.exports = class ActiveMembersFilter {
                 cursor: pointer;
             }
             .amf-member:hover {
-                background: var(--background-modifier-hover, #35373c);
+                background: var(--interactive-background-hover, var(--background-modifier-hover, #35373c));
             }
             .amf-member:active {
-                background: var(--background-modifier-selected, #3f4147);
+                background: var(--interactive-background-selected, var(--background-modifier-selected, #3f4147));
             }
             .amf-avatar-wrap {
                 position: relative;
@@ -334,7 +339,7 @@ module.exports = class ActiveMembersFilter {
                 padding: 3px;
                 border-radius: 50%;
                 box-sizing: content-box;
-                background: var(--background-secondary, #2b2d31);
+                background: var(--background-gradient-chat, var(--custom-channel-members-bg, var(--background-base-lower, var(--background-secondary, #2b2d31))));
             }
             .amf-status svg {
                 display: block;
@@ -343,7 +348,7 @@ module.exports = class ActiveMembersFilter {
             }
             .amf-settings {
                 padding: 4px 0;
-                color: var(--text-normal, #dbdee1);
+                color: var(--text-default, var(--text-normal, #dbdee1));
                 font-size: 14px;
             }
             .amf-settings-head {
@@ -366,7 +371,7 @@ module.exports = class ActiveMembersFilter {
             .amf-name {
                 font-size: 14px;
                 font-weight: 500;
-                color: var(--text-normal, #dbdee1);
+                color: var(--text-default, var(--text-normal, #dbdee1));
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
@@ -408,9 +413,9 @@ module.exports = class ActiveMembersFilter {
                 width: 520px;
                 max-height: 76vh;
                 overflow-y: auto;
-                background: #111214;
-                color: #dbdee1;
-                border: 1px solid #5865f2;
+                background: var(--background-base-lowest, #111214);
+                color: var(--text-default, #dbdee1);
+                border: 1px solid var(--background-brand, var(--brand-500, #5865f2));
                 border-radius: 8px;
                 padding: 12px;
                 font-family: monospace;
@@ -429,8 +434,8 @@ module.exports = class ActiveMembersFilter {
             }
             .amf-debug-toolbar > div {
                 cursor: pointer;
-                background: #5865f2;
-                color: #fff;
+                background: var(--background-brand, var(--brand-500, #5865f2));
+                color: var(--white, #fff);
                 border-radius: 4px;
                 padding: 2px 8px;
                 font-weight: bold;

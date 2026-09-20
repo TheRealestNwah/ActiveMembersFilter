@@ -38,8 +38,8 @@ Each member shows a status dot (online, idle, do-not-disturb, streaming) on thei
 as the native list does.
 
 **Settings → Plugins → ActiveMembersFilter** has a settings panel: which activity types
-count as active, whether to exclude bots and apps, and whether to show friends only.
-Changes apply immediately.
+count as active, whether to exclude bots and apps, whether to hide known browsers and
+utility apps, and whether to show friends only. Changes apply immediately.
 
 ## How it works
 
@@ -72,6 +72,12 @@ count as active and type 4 (custom status) does not, and bots and system account
 Discord marks with an `APP` tag — are excluded. All of that is configurable in the settings
 panel. A user who cannot be looked up at all is treated as human and kept, so a failed
 lookup never silently drops a real person; the friends-only filter follows the same rule.
+
+Discord reports whatever process is running as a "Playing" activity, so a web browser
+sitting in the background looks the same to the presence system as an actual game. By
+default the panel hides a curated list of known browsers (Chrome, Firefox, Edge, ...) and
+utility apps (e.g. SteelSeries GameSense's DSX feedback module) matched by name — turn this
+off in the settings panel to see them anyway.
 
 Members are grouped by their highest **hoisted** role, ordered by role position, exactly as
 Discord groups them — and a group header is only created alongside its members, so an empty

@@ -5,7 +5,7 @@
  * @source https://github.com/TheRealestNwah/ActiveMembersFilter
  * @website https://github.com/TheRealestNwah/ActiveMembersFilter
  * @description Adds a toggle to the channel header that replaces the member list with just the people currently playing a game, listening to Spotify, streaming or watching something.
- * @version 1.2.0
+ * @version 1.3.0
  */
 
 /*
@@ -15,14 +15,14 @@
  */
 
 // Discord reports whatever process is running as a "Playing" activity, not
-// just games — a web browser sitting in the background is indistinguishable
-// from a game to the presence system. This is a curated allowlist of names
-// that are never games, matched case-insensitively against the activity
-// name, so the "known apps" setting can filter them out without a false
-// positive on a real game that happens to share a generic word.
-const KNOWN_NON_GAME_APPS = new Set(
+// just games — a web browser or a utility sitting in the background is
+// indistinguishable from a game to the presence system. These are curated
+// allowlists of names that are never games, matched case-insensitively
+// against the activity name, so the two "known apps" settings below can
+// filter them out independently without a false positive on a real game
+// that happens to share a generic word.
+const KNOWN_BROWSERS = new Set(
     [
-        // Web browsers
         "Google Chrome",
         "Chrome",
         "Mozilla Firefox",
@@ -37,7 +37,11 @@ const KNOWN_NON_GAME_APPS = new Set(
         "Chromium",
         "Tor Browser",
         "Internet Explorer",
-        // Utility / hardware apps that register as an activity
+    ].map((s) => s.toLowerCase())
+);
+
+const KNOWN_UTILITY_APPS = new Set(
+    [
         "DSX", // SteelSeries GameSense feedback module
         "SteelSeries GG",
         "SteelSeries Engine",
@@ -50,6 +54,8 @@ const KNOWN_NON_GAME_APPS = new Set(
         "AMD Software",
         "OBS Studio",
         "Discord",
+        "Wallpaper Engine",
+        "Lossless Scaling",
     ].map((s) => s.toLowerCase())
 );
 
@@ -108,7 +114,8 @@ module.exports = class ActiveMembersFilter {
             types: { 0: true, 1: true, 2: true, 3: true, 5: true },
             excludeBots: true,
             friendsOnly: false,
-            hideKnownApps: true,
+            hideKnownBrowsers: true,
+            hideKnownUtilityApps: true,
         };
     }
 
@@ -123,6 +130,13 @@ module.exports = class ActiveMembersFilter {
                 null;
         } catch (e) {
             /* fall back to defaults */
+        }
+        // 1.2.0 had one combined "hideKnownApps" toggle. Carry an existing
+        // user's choice over to both of the settings that replaced it, so
+        // updating doesn't silently turn a disabled filter back on.
+        if (saved && typeof saved.hideKnownApps === "boolean") {
+            if (saved.hideKnownBrowsers === undefined) saved.hideKnownBrowsers = saved.hideKnownApps;
+            if (saved.hideKnownUtilityApps === undefined) saved.hideKnownUtilityApps = saved.hideKnownApps;
         }
         this.settings = Object.assign(defaults, saved || {});
         this.settings.types = Object.assign(defaults.types, (saved && saved.types) || {});
@@ -196,10 +210,17 @@ module.exports = class ActiveMembersFilter {
             }
         );
         toggle(
-            "Hide known browsers and utility apps (Chrome, Firefox, DSX, ...)",
-            () => this.settings.hideKnownApps,
+            "Hide known browsers (Chrome, Firefox, Edge, ...)",
+            () => this.settings.hideKnownBrowsers,
             (v) => {
-                this.settings.hideKnownApps = v;
+                this.settings.hideKnownBrowsers = v;
+            }
+        );
+        toggle(
+            "Hide known utility apps (DSX, Wallpaper Engine, OBS, ...)",
+            () => this.settings.hideKnownUtilityApps,
+            (v) => {
+                this.settings.hideKnownUtilityApps = v;
             }
         );
         toggle(
@@ -723,9 +744,7 @@ module.exports = class ActiveMembersFilter {
             return null;
         }
         const real = acts.filter((a) => a && this.settings.types[a.type]);
-        const visible = this.settings.hideKnownApps
-            ? real.filter((a) => !this.isKnownNonGameApp(a))
-            : real;
+        const visible = real.filter((a) => !this.isHiddenKnownApp(a));
         if (!visible.length) return null;
 
         const a = visible[0];
@@ -746,11 +765,16 @@ module.exports = class ActiveMembersFilter {
     // Only a "Playing" activity (type 0) is ever a browser or utility app —
     // Discord's other activity types (streaming, listening, watching,
     // competing) come from an integration that already names the real thing,
-    // so this deliberately leaves them alone.
-    isKnownNonGameApp(a) {
+    // so this deliberately leaves them alone. The two settings are checked
+    // independently, so a browser and a utility app can be shown or hidden
+    // on their own.
+    isHiddenKnownApp(a) {
         if (a.type !== 0) return false;
         const name = String(a.name || "").trim().toLowerCase();
-        return name.length > 0 && KNOWN_NON_GAME_APPS.has(name);
+        if (!name) return false;
+        if (this.settings.hideKnownBrowsers && KNOWN_BROWSERS.has(name)) return true;
+        if (this.settings.hideKnownUtilityApps && KNOWN_UTILITY_APPS.has(name)) return true;
+        return false;
     }
 
     // Console activities carry the platform when the account is linked, which

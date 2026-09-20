@@ -5,7 +5,7 @@
  * @source https://github.com/TheRealestNwah/ActiveMembersFilter
  * @website https://github.com/TheRealestNwah/ActiveMembersFilter
  * @description Adds a toggle to the channel header that replaces the member list with just the people currently playing a game, listening to Spotify, streaming or watching something.
- * @version 1.1.2
+ * @version 1.2.0
  */
 
 /*
@@ -13,6 +13,45 @@
  * Claude Code, under the author's direction and tested by the author. See the
  * README for details.
  */
+
+// Discord reports whatever process is running as a "Playing" activity, not
+// just games — a web browser sitting in the background is indistinguishable
+// from a game to the presence system. This is a curated allowlist of names
+// that are never games, matched case-insensitively against the activity
+// name, so the "known apps" setting can filter them out without a false
+// positive on a real game that happens to share a generic word.
+const KNOWN_NON_GAME_APPS = new Set(
+    [
+        // Web browsers
+        "Google Chrome",
+        "Chrome",
+        "Mozilla Firefox",
+        "Firefox",
+        "Microsoft Edge",
+        "Brave Browser",
+        "Brave",
+        "Opera",
+        "Opera GX",
+        "Vivaldi",
+        "Safari",
+        "Chromium",
+        "Tor Browser",
+        "Internet Explorer",
+        // Utility / hardware apps that register as an activity
+        "DSX", // SteelSeries GameSense feedback module
+        "SteelSeries GG",
+        "SteelSeries Engine",
+        "Razer Cortex",
+        "Razer Synapse",
+        "Logitech G HUB",
+        "NVIDIA GeForce Experience",
+        "NVIDIA Overlay",
+        "MSI Afterburner",
+        "AMD Software",
+        "OBS Studio",
+        "Discord",
+    ].map((s) => s.toLowerCase())
+);
 
 module.exports = class ActiveMembersFilter {
     constructor() {
@@ -69,6 +108,7 @@ module.exports = class ActiveMembersFilter {
             types: { 0: true, 1: true, 2: true, 3: true, 5: true },
             excludeBots: true,
             friendsOnly: false,
+            hideKnownApps: true,
         };
     }
 
@@ -153,6 +193,13 @@ module.exports = class ActiveMembersFilter {
             () => this.settings.excludeBots,
             (v) => {
                 this.settings.excludeBots = v;
+            }
+        );
+        toggle(
+            "Hide known browsers and utility apps (Chrome, Firefox, DSX, ...)",
+            () => this.settings.hideKnownApps,
+            (v) => {
+                this.settings.hideKnownApps = v;
             }
         );
         toggle(
@@ -676,9 +723,12 @@ module.exports = class ActiveMembersFilter {
             return null;
         }
         const real = acts.filter((a) => a && this.settings.types[a.type]);
-        if (!real.length) return null;
+        const visible = this.settings.hideKnownApps
+            ? real.filter((a) => !this.isKnownNonGameApp(a))
+            : real;
+        if (!visible.length) return null;
 
-        const a = real[0];
+        const a = visible[0];
         const verb =
             { 0: "Playing", 1: "Streaming", 2: "Listening to", 3: "Watching", 5: "Competing in" }[
                 a.type
@@ -691,6 +741,16 @@ module.exports = class ActiveMembersFilter {
             platform: this.platformFor(a),
             label: `${verb} ${this.activitySubject(a)}`.trim(),
         };
+    }
+
+    // Only a "Playing" activity (type 0) is ever a browser or utility app —
+    // Discord's other activity types (streaming, listening, watching,
+    // competing) come from an integration that already names the real thing,
+    // so this deliberately leaves them alone.
+    isKnownNonGameApp(a) {
+        if (a.type !== 0) return false;
+        const name = String(a.name || "").trim().toLowerCase();
+        return name.length > 0 && KNOWN_NON_GAME_APPS.has(name);
     }
 
     // Console activities carry the platform when the account is linked, which

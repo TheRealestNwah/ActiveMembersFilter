@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  syntax-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # There's no test framework here (single-file BetterDiscord plugin,
+      # no bundler, no runtime to load Discord's own APIs against), so this
+      # is the automated check that fits: catch a syntax error before it
+      # can land on main, where BetterDiscord would hot-load it straight
+      # into someone's Discord client.
+      - name: Check plugin syntax
+        run: node --check ActiveMembersFilter.plugin.js

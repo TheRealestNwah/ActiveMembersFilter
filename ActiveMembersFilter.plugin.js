@@ -5,7 +5,7 @@
  * @source https://github.com/TheRealestNwah/ActiveMembersFilter
  * @website https://github.com/TheRealestNwah/ActiveMembersFilter
  * @description Adds a toggle to the channel header that replaces the member list with just the people currently playing a game, listening to Spotify, streaming or watching something.
- * @version 1.3.0
+ * @version 1.4.0
  */
 
 /*
@@ -17,12 +17,14 @@
 // Discord reports whatever process is running as a "Playing" activity, not
 // just games — a web browser or a utility sitting in the background is
 // indistinguishable from a game to the presence system. These are curated
-// allowlists of names that are never games, matched case-insensitively
-// against the activity name, so the two "known apps" settings below can
-// filter them out independently without a false positive on a real game
-// that happens to share a generic word.
-const KNOWN_BROWSERS = new Set(
-    [
+// allowlist of names that are usually not games, matched case-insensitively
+// against the activity name. Users choose individual entries in settings,
+// because a useful background activity for one person can be noise to another.
+const EXCLUDABLE_APPS = [
+    {
+        category: "Browsers",
+        defaultExcluded: true,
+        names: [
         "Google Chrome",
         "Chrome",
         "Mozilla Firefox",
@@ -37,11 +39,12 @@ const KNOWN_BROWSERS = new Set(
         "Chromium",
         "Tor Browser",
         "Internet Explorer",
-    ].map((s) => s.toLowerCase())
-);
-
-const KNOWN_UTILITY_APPS = new Set(
-    [
+        ],
+    },
+    {
+        category: "Utilities",
+        defaultExcluded: true,
+        names: [
         "DSX", // SteelSeries GameSense feedback module
         "SteelSeries GG",
         "SteelSeries Engine",
@@ -56,8 +59,23 @@ const KNOWN_UTILITY_APPS = new Set(
         "Discord",
         "Wallpaper Engine",
         "Lossless Scaling",
-    ].map((s) => s.toLowerCase())
-);
+        "Borderless Gaming",
+        ],
+    },
+    {
+        category: "Other reported apps",
+        defaultExcluded: false,
+        // These can be meaningful activity, or can collide with a real game,
+        // so make them available without silently excluding them by default.
+        names: ["BlueStacks", "fpsVR", "Everything", "Pressure Vessel"],
+    },
+];
+
+const normalizeAppName = (name) => String(name || "").trim().toLowerCase();
+const appsInCategory = (category) =>
+    EXCLUDABLE_APPS.find((group) => group.category === category)?.names || [];
+const defaultExcludedApps = () =>
+    EXCLUDABLE_APPS.filter((group) => group.defaultExcluded).flatMap((group) => group.names);
 
 module.exports = class ActiveMembersFilter {
     constructor() {
@@ -114,8 +132,8 @@ module.exports = class ActiveMembersFilter {
             types: { 0: true, 1: true, 2: true, 3: true, 5: true },
             excludeBots: true,
             friendsOnly: false,
-            hideKnownBrowsers: true,
-            hideKnownUtilityApps: true,
+            excludedApps: defaultExcludedApps(),
+            customExcludedApps: [],
         };
     }
 
@@ -131,15 +149,34 @@ module.exports = class ActiveMembersFilter {
         } catch (e) {
             /* fall back to defaults */
         }
-        // 1.2.0 had one combined "hideKnownApps" toggle. Carry an existing
-        // user's choice over to both of the settings that replaced it, so
-        // updating doesn't silently turn a disabled filter back on.
-        if (saved && typeof saved.hideKnownApps === "boolean") {
-            if (saved.hideKnownBrowsers === undefined) saved.hideKnownBrowsers = saved.hideKnownApps;
-            if (saved.hideKnownUtilityApps === undefined) saved.hideKnownUtilityApps = saved.hideKnownApps;
+        // Versions through 1.3.0 used category toggles. Seed the new per-app
+        // checklist from those choices so upgrading does not change behavior.
+        if (saved && !Array.isArray(saved.excludedApps)) {
+            const combined = typeof saved.hideKnownApps === "boolean" ? saved.hideKnownApps : null;
+            const hideBrowsers = saved.hideKnownBrowsers ?? combined ?? true;
+            const hideUtilities = saved.hideKnownUtilityApps ?? combined ?? true;
+            saved.excludedApps = [
+                ...(hideBrowsers ? appsInCategory("Browsers") : []),
+                ...(hideUtilities ? appsInCategory("Utilities") : []),
+            ];
+        }
+        if (saved) {
+            delete saved.hideKnownApps;
+            delete saved.hideKnownBrowsers;
+            delete saved.hideKnownUtilityApps;
         }
         this.settings = Object.assign(defaults, saved || {});
         this.settings.types = Object.assign(defaults.types, (saved && saved.types) || {});
+        this.settings.excludedApps = Array.from(
+            new Set((Array.isArray(this.settings.excludedApps) ? this.settings.excludedApps : []).map(String))
+        );
+        this.settings.customExcludedApps = Array.from(
+            new Set(
+                (Array.isArray(this.settings.customExcludedApps) ? this.settings.customExcludedApps : [])
+                    .map(String)
+                    .filter((name) => name.trim())
+            )
+        );
     }
 
     saveSettings() {
@@ -183,6 +220,161 @@ module.exports = class ActiveMembersFilter {
             wrap.appendChild(row);
         };
 
+        const appExclusionPicker = () => {
+            const details = document.createElement("details");
+            details.className = "amf-app-picker";
+            const summary = document.createElement("summary");
+            const body = document.createElement("div");
+            body.className = "amf-app-picker-body";
+
+            const selected = () => new Set(this.settings.excludedApps.map(normalizeAppName));
+            const updateSummary = () => {
+                const count = new Set(
+                    [...this.settings.excludedApps, ...this.settings.customExcludedApps].map(normalizeAppName)
+                ).size;
+                summary.textContent = `Excluded apps (${count} selected)`;
+            };
+            updateSummary();
+            details.appendChild(summary);
+
+            const search = document.createElement("input");
+            search.className = "amf-app-search";
+            search.type = "search";
+            search.placeholder = "Search apps";
+            search.setAttribute("aria-label", "Search apps available for exclusion");
+            body.appendChild(search);
+
+            const controls = document.createElement("div");
+            controls.className = "amf-app-controls";
+            const setGroup = (names, checked) => {
+                const next = selected();
+                for (const name of names) {
+                    const normalized = normalizeAppName(name);
+                    if (checked) next.add(normalized);
+                    else next.delete(normalized);
+                }
+                this.settings.excludedApps = EXCLUDABLE_APPS.flatMap((group) => group.names).filter((name) =>
+                    next.has(normalizeAppName(name))
+                );
+                this.saveSettings();
+                renderKnownApps();
+                updateSummary();
+            };
+            const controlButton = (label, action) => {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.textContent = label;
+                button.addEventListener("click", action);
+                controls.appendChild(button);
+            };
+            controlButton("All browsers", () => setGroup(appsInCategory("Browsers"), true));
+            controlButton("All utilities", () => setGroup(appsInCategory("Utilities"), true));
+            controlButton("Clear", () => setGroup(EXCLUDABLE_APPS.flatMap((group) => group.names), false));
+            body.appendChild(controls);
+
+            const list = document.createElement("div");
+            list.className = "amf-app-list";
+            body.appendChild(list);
+
+            const renderKnownApps = () => {
+                const query = normalizeAppName(search.value);
+                const current = selected();
+                list.replaceChildren();
+                for (const group of EXCLUDABLE_APPS) {
+                    const matches = group.names.filter((name) => normalizeAppName(name).includes(query));
+                    if (!matches.length) continue;
+                    const heading = document.createElement("div");
+                    heading.className = "amf-app-category";
+                    heading.textContent = group.category;
+                    list.appendChild(heading);
+                    for (const name of matches) {
+                        const row = document.createElement("label");
+                        row.className = "amf-settings-row amf-app-row";
+                        const box = document.createElement("input");
+                        box.type = "checkbox";
+                        box.checked = current.has(normalizeAppName(name));
+                        box.addEventListener("change", () => {
+                            const next = selected();
+                            if (box.checked) next.add(normalizeAppName(name));
+                            else next.delete(normalizeAppName(name));
+                            this.settings.excludedApps = EXCLUDABLE_APPS.flatMap((item) => item.names).filter(
+                                (item) => next.has(normalizeAppName(item))
+                            );
+                            this.saveSettings();
+                            updateSummary();
+                        });
+                        const text = document.createElement("span");
+                        text.textContent = name;
+                        row.append(box, text);
+                        list.appendChild(row);
+                    }
+                }
+            };
+            search.addEventListener("input", renderKnownApps);
+            renderKnownApps();
+
+            const custom = document.createElement("div");
+            custom.className = "amf-custom-apps";
+            const customTitle = document.createElement("div");
+            customTitle.className = "amf-app-category";
+            customTitle.textContent = "Custom exact names";
+            const customHelp = document.createElement("div");
+            customHelp.className = "amf-app-help";
+            customHelp.textContent = "Enter the exact name shown after Playing in Discord.";
+            const customRows = document.createElement("div");
+            const renderCustomApps = () => {
+                customRows.replaceChildren();
+                for (const name of this.settings.customExcludedApps) {
+                    const row = document.createElement("div");
+                    row.className = "amf-custom-app-row";
+                    const label = document.createElement("span");
+                    label.textContent = name;
+                    const remove = document.createElement("button");
+                    remove.type = "button";
+                    remove.textContent = "Remove";
+                    remove.setAttribute("aria-label", `Remove ${name} from exclusions`);
+                    remove.addEventListener("click", () => {
+                        this.settings.customExcludedApps = this.settings.customExcludedApps.filter(
+                            (item) => normalizeAppName(item) !== normalizeAppName(name)
+                        );
+                        this.saveSettings();
+                        renderCustomApps();
+                        updateSummary();
+                    });
+                    row.append(label, remove);
+                    customRows.appendChild(row);
+                }
+            };
+            const addRow = document.createElement("form");
+            addRow.className = "amf-custom-app-add";
+            const customInput = document.createElement("input");
+            customInput.placeholder = "Activity name";
+            customInput.setAttribute("aria-label", "Custom activity name to exclude");
+            const add = document.createElement("button");
+            add.type = "submit";
+            add.textContent = "Add";
+            addRow.append(customInput, add);
+            addRow.addEventListener("submit", (event) => {
+                event.preventDefault();
+                const value = customInput.value.trim();
+                if (!value) return;
+                const known = new Set(
+                    [...this.settings.excludedApps, ...this.settings.customExcludedApps].map(normalizeAppName)
+                );
+                if (!known.has(normalizeAppName(value))) this.settings.customExcludedApps.push(value);
+                customInput.value = "";
+                this.saveSettings();
+                renderCustomApps();
+                updateSummary();
+            });
+            custom.append(customTitle, customHelp, customRows, addRow);
+            body.appendChild(custom);
+            renderCustomApps();
+
+            details.appendChild(body);
+            wrap.appendChild(details);
+        };
+
         section("Count as active");
         const typeLabels = {
             0: "Playing a game",
@@ -209,20 +401,7 @@ module.exports = class ActiveMembersFilter {
                 this.settings.excludeBots = v;
             }
         );
-        toggle(
-            "Hide known browsers (Chrome, Firefox, Edge, ...)",
-            () => this.settings.hideKnownBrowsers,
-            (v) => {
-                this.settings.hideKnownBrowsers = v;
-            }
-        );
-        toggle(
-            "Hide known utility apps (DSX, Wallpaper Engine, OBS, ...)",
-            () => this.settings.hideKnownUtilityApps,
-            (v) => {
-                this.settings.hideKnownUtilityApps = v;
-            }
-        );
+        appExclusionPicker();
         toggle(
             "Friends only",
             () => this.settings.friendsOnly,
@@ -432,6 +611,81 @@ module.exports = class ActiveMembersFilter {
                 gap: 10px;
                 padding: 6px 0;
                 cursor: pointer;
+            }
+            .amf-app-picker {
+                margin: 8px 0;
+                border: 1px solid var(--border-subtle, var(--background-modifier-accent, #3f4147));
+                border-radius: 6px;
+                background: var(--background-surface-high, var(--background-secondary-alt, #2b2d31));
+            }
+            .amf-app-picker summary {
+                padding: 10px 12px;
+                cursor: pointer;
+                font-weight: 600;
+                user-select: none;
+            }
+            .amf-app-picker-body {
+                padding: 0 12px 12px;
+            }
+            .amf-app-search,
+            .amf-custom-app-add input {
+                box-sizing: border-box;
+                width: 100%;
+                padding: 8px 10px;
+                border: 1px solid var(--border-subtle, var(--background-modifier-accent, #3f4147));
+                border-radius: 4px;
+                background: var(--input-background, var(--background-base-lowest, #1e1f22));
+                color: var(--text-default, var(--text-normal, #dbdee1));
+            }
+            .amf-app-controls {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+                margin: 8px 0;
+            }
+            .amf-app-controls button,
+            .amf-custom-app-row button,
+            .amf-custom-app-add button {
+                padding: 6px 9px;
+                border: 0;
+                border-radius: 4px;
+                cursor: pointer;
+                background: var(--button-secondary-background, var(--background-modifier-accent, #3f4147));
+                color: var(--text-default, var(--text-normal, #dbdee1));
+            }
+            .amf-app-list {
+                max-height: 260px;
+                overflow-y: auto;
+            }
+            .amf-app-category {
+                margin-top: 10px;
+                padding-bottom: 3px;
+                font-size: 12px;
+                font-weight: 700;
+                color: var(--text-muted, #949ba4);
+            }
+            .amf-app-help {
+                font-size: 12px;
+                color: var(--text-muted, #949ba4);
+            }
+            .amf-app-row {
+                padding: 4px 0;
+            }
+            .amf-custom-app-row,
+            .amf-custom-app-add {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin-top: 6px;
+            }
+            .amf-custom-app-row span {
+                flex: 1;
+                min-width: 0;
+                overflow-wrap: anywhere;
+            }
+            .amf-custom-app-add input {
+                flex: 1;
+                min-width: 0;
             }
             .amf-member-text {
                 min-width: 0;
@@ -765,16 +1019,15 @@ module.exports = class ActiveMembersFilter {
     // Only a "Playing" activity (type 0) is ever a browser or utility app —
     // Discord's other activity types (streaming, listening, watching,
     // competing) come from an integration that already names the real thing,
-    // so this deliberately leaves them alone. The two settings are checked
-    // independently, so a browser and a utility app can be shown or hidden
-    // on their own.
+    // so this deliberately leaves them alone. The selected built-in and custom
+    // exact names share the same case-insensitive comparison.
     isHiddenKnownApp(a) {
         if (a.type !== 0) return false;
-        const name = String(a.name || "").trim().toLowerCase();
+        const name = normalizeAppName(a.name);
         if (!name) return false;
-        if (this.settings.hideKnownBrowsers && KNOWN_BROWSERS.has(name)) return true;
-        if (this.settings.hideKnownUtilityApps && KNOWN_UTILITY_APPS.has(name)) return true;
-        return false;
+        return [...this.settings.excludedApps, ...this.settings.customExcludedApps]
+            .map(normalizeAppName)
+            .includes(name);
     }
 
     // Console activities carry the platform when the account is linked, which

@@ -21,3 +21,5 @@ jobs:
       # into someone's Discord client.
       - name: Check plugin syntax
         run: node --check ActiveMembersFilter.plugin.js
+      - name: Test exclusion settings
+        run: node --test tests/*.test.js

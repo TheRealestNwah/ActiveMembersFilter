@@ -38,8 +38,9 @@ Each member shows a status dot (online, idle, do-not-disturb, streaming) on thei
 as the native list does.
 
 **Settings → Plugins → ActiveMembersFilter** has a settings panel: which activity types
-count as active, whether to exclude bots and apps, whether to hide known browsers, whether
-to hide known utility apps, and whether to show friends only. Changes apply immediately.
+count as active, whether to exclude bots and apps, and whether to show friends only. Its
+searchable **Excluded apps** checklist lets you choose individual browsers and utilities,
+select a whole category, or add an exact activity name of your own. Changes apply immediately.
 
 ## How it works
 

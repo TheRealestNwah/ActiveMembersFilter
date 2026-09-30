@@ -12,6 +12,10 @@ scrolling it to find who is actually playing something is tedious.
   <img src="docs/screenshot.png" alt="The active members panel: members grouped by role, each showing what they are playing, streaming or listening to" width="250">
 </p>
 
+> **Built with AI.** Most of this plugin's code was written by Claude, an AI
+> model from Anthropic, directed and tested by the maintainer on a live Discord
+> client. See [AI disclosure](#ai-disclosure).
+
 ## Install
 
 1. Copy `ActiveMembersFilter.plugin.js` into your BetterDiscord plugins folder:
@@ -183,6 +187,13 @@ This plugin was written with substantial help from AI. The code was largely gene
 my direction, bug reports and testing on a live Discord client. I decided what it should
 do, tested every change, and chose what shipped, but most of the code itself — and much of
 this README — was written by the AI rather than by hand.
+
+## Support
+
+Everything on my GitHub is free of charge and open source. If you find it
+useful and want to leave a tip or buy me a coffee, you can do that at
+[ko-fi.com/morrowheat23](https://ko-fi.com/morrowheat23). It's appreciated,
+never expected.
 
 ## License
 

@@ -5,7 +5,7 @@
  * @source https://github.com/TheRealestNwah/ActiveMembersFilter
  * @website https://github.com/TheRealestNwah/ActiveMembersFilter
  * @description Adds a toggle to the channel header that replaces the member list with just the people currently playing a game, listening to Spotify, streaming or watching something.
- * @version 1.4.0
+ * @version 1.4.1
  */
 
 /*
@@ -1063,6 +1063,14 @@ module.exports = class ActiveMembersFilter {
         const first = (...values) => values.find((v) => typeof v === "string" && v.trim()) || "";
         if (a.type === 1) return first(a.state, a.details, a.name, "?");
         if (a.type === 2) return first(a.details, a.name, "?");
+        // Rich-presence apps (e.g. Plex) set name="Plex" and put the title in
+        // details/state. Discord's own profile honours status_display_type
+        // (0 name, 1 state, 2 details) to pick which one headlines.
+        const display = a.status_display_type ?? a.statusDisplayType;
+        if (display === 1) return first(a.state, a.name, a.details, "?");
+        if (display === 2) return first(a.details, a.name, a.state, "?");
+        // "Watching" is always an integration; name is just the service.
+        if (a.type === 3) return first(a.details, a.name, a.state, "?");
         return first(a.name, a.details, a.state, "?");
     }
 

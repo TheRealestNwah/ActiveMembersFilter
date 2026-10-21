@@ -11,3 +11,6 @@ desktop.ini
 
 # Node, if tooling is ever added
 node_modules/
+
+# Private agent notes (CLAUDE.md is shared)
+CLAUDE.local.md

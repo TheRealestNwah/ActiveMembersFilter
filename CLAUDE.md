@@ -26,3 +26,17 @@ node --test tests/*.test.js                  # unit tests
 - Mount the toggle button unconditionally so the debug panel is reachable when detection fails.
 - Don't run diagnostics sweeps on every pass; they only run when the debug panel asks.
 - Bump `@version` and update the README when behaviour changes. The README's "Known issues" and "Debugging notes" sections are kept deliberately.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
